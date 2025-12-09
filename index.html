@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="sr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Uplatnice i Potvrde</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      (function() {
+        console.log('=== HTML SCRIPT START ===')
+        const statusEl = document.getElementById('status')
+        const debugEl = document.getElementById('debug')
+        
+        if (statusEl) {
+          statusEl.textContent = 'JavaScript is executing! Loading main.jsx...'
+          statusEl.style.color = '#00aa00'
+        }
+        
+        console.log('HTML loaded, about to load main.jsx')
+        console.log('Document ready state:', document.readyState)
+        console.log('Window object:', typeof window)
+        
+        // Test if script loading works
+        window.addEventListener('error', (e) => {
+          console.error('Script error:', e)
+          if (statusEl) {
+            statusEl.innerHTML = 'Error: ' + e.message + '<br>File: ' + (e.filename || 'unknown')
+            statusEl.style.color = '#ff0000'
+          }
+        })
+        
+        // Check if main.jsx loads
+        setTimeout(() => {
+          if (!window.reactLoaded) {
+            console.error('main.jsx did not load after 5 seconds')
+            if (statusEl) {
+              statusEl.innerHTML = 'ERROR: main.jsx did not load after 5 seconds. Check Network tab in DevTools.'
+              statusEl.style.color = '#ff0000'
+            }
+            if (debugEl) {
+              debugEl.innerHTML += '<p style="color: #ff0000;">main.jsx failed to load. Check Network tab for /src/main.jsx</p>'
+            }
+          }
+        }, 5000)
+        
+        console.log('=== HTML SCRIPT END ===')
+      })()
+    </script>
+    <script type="module">
+      console.log('=== Loading main.jsx module ===')
+      import('/src/main.jsx').then(() => {
+        console.log('✓ main.jsx loaded successfully')
+        window.reactLoaded = true
+      }).catch((error) => {
+        console.error('✗ Failed to load main.jsx:', error)
+        const statusEl = document.getElementById('status')
+        if (statusEl) {
+          statusEl.innerHTML = 'ERROR loading main.jsx: ' + error.message
+          statusEl.style.color = '#ff0000'
+        }
+      })
+    </script>
+  </body>
+</html>
+

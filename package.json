@@ -1,0 +1,132 @@
+{
+  "name": "uplatnice-potvrda-app",
+  "version": "1.0.0",
+  "description": "Modern web and Windows app for printing Uplatnice and Potvrde",
+  "type": "module",
+  "main": "electron/main.js",
+  "author": "Vaha",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "electron:dev": "electron-vite dev",
+    "electron:build": "electron-vite build",
+    "electron:preview": "electron-vite preview",
+    "electron:rebuild": "electron-rebuild -f -w better-sqlite3",
+    "import:data": "node HELPERS/import-initial-data.js",
+    "export:db": "node HELPERS/export-to-db.js",
+    "start": "concurrently \"pnpm dev\" \"wait-on http://localhost:5175 && pnpm electron:dev\"",
+    "start:dev": "pnpm dev",
+    "start:electron": "pnpm electron:dev",
+    "dist": "electron-vite build && electron-builder",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "dist:win:portable": "electron-vite build && electron-builder --win portable --config.win.target=portable --config.win.sign=null",
+    "dist:linux": "electron-vite build && electron-builder --linux",
+    "dist:linux:appimage": "electron-vite build && electron-builder --linux AppImage",
+    "dist:linux:deb": "electron-vite build && electron-builder --linux deb",
+    "dist:linux:pacman": "electron-vite build && electron-builder --linux pacman"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.5.0",
+    "dexie": "^4.2.1",
+    "framer-motion": "^12.23.25",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-toast": "^1.2.15",
+    "@vitejs/plugin-react": "^5.1.1",
+    "autoprefixer": "^10.4.20",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "electron": "^39.2.6",
+    "electron-builder": "^25.1.8",
+    "electron-rebuild": "^3.2.9",
+    "electron-vite": "^5.0.0",
+    "lucide-react": "^0.556.0",
+    "postcss": "^8.4.40",
+    "sqlite3": "^5.1.7",
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss": "^3.4.17",
+    "tailwindcss-animate": "^1.0.7",
+    "vite": "^7.2.6"
+  },
+  "build": {
+    "appId": "com.uplatnice.potvrde",
+    "productName": "Uplatnice i Potvrde",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "electron/**/*",
+      "!node_modules/**/*",
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/bindings/**/*",
+      "node_modules/file-uri-to-path/**/*",
+      "node_modules/xlsx/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "uplatnice.db",
+        "to": "uplatnice.db"
+      },
+      {
+        "from": "potvrde.db",
+        "to": "potvrde.db"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/logo.png",
+      "sign": null,
+      "signingHashAlgorithms": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "pacman",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Office",
+      "icon": "resources/logo.png",
+      "desktop": {
+        "Name": "Uplatnice i Potvrde",
+        "Comment": "Aplikacija za štampanje uplatnica i potvrda",
+        "Categories": "Office;Utility;"
+      }
+    }
+  }
+}
