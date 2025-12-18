@@ -18,7 +18,6 @@ function App() {
     return false
   })
 
-
   useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add('dark')
@@ -26,22 +25,42 @@ function App() {
       document.documentElement.classList.remove('dark')
     }
     localStorage.setItem('darkMode', darkMode.toString())
+
+    // Sync native theme
+    if (window.electronAPI?.setNativeTheme) {
+      window.electronAPI.setNativeTheme(darkMode ? 'dark' : 'light')
+    }
   }, [darkMode])
 
   // Listen for navigation and theme changes from Electron menu
   useEffect(() => {
     if (typeof window !== 'undefined' && window.electronAPI) {
-      // Navigation listener
+      console.log('Setting up navigation listeners...')
+
+      // Navigation listener using onNavigate callback
       if (window.electronAPI.onNavigate) {
+        console.log('Using onNavigate callback')
         window.electronAPI.onNavigate((page) => {
+          console.log('Navigation event received via onNavigate:', page)
+          setCurrentPage(page)
+        })
+      }
+
+      // Also listen directly to IPC events as fallback
+      if (window.electronAPI.on) {
+        console.log('Setting up direct IPC listener for navigate')
+        window.electronAPI.on('navigate', (page) => {
+          console.log('Navigation event received via IPC on:', page)
           setCurrentPage(page)
         })
       }
 
       // Theme listener
-      window.electronAPI.on('set-theme', (theme) => {
-        setDarkMode(theme === 'dark')
-      })
+      if (window.electronAPI.on) {
+        window.electronAPI.on('set-theme', (theme) => {
+          setDarkMode(theme === 'dark')
+        })
+      }
 
       return () => {
         if (window.electronAPI.removeAllListeners) {
@@ -49,6 +68,8 @@ function App() {
           window.electronAPI.removeAllListeners('set-theme')
         }
       }
+    } else {
+      console.warn('window.electronAPI not available')
     }
   }, [])
 
@@ -56,13 +77,17 @@ function App() {
     dashboard: <Dashboard onNavigate={setCurrentPage} />,
     uplatnice: <UplatniceForm onNavigate={setCurrentPage} />,
     potvrde: <PotvrdeForm onNavigate={setCurrentPage} />,
-    settings: <Settings onNavigate={setCurrentPage} />
+    settings: <Settings
+      onNavigate={setCurrentPage}
+      darkMode={darkMode}
+      setDarkMode={setDarkMode}
+    />
   }
 
   try {
     return (
       <AppProvider>
-        <div className="h-screen w-screen overflow-hidden bg-background text-foreground">
+        <div className="h-screen w-screen overflow-hidden text-foreground bg-background">
           <Layout>
             <AnimatePresence mode="wait">
               <motion.div

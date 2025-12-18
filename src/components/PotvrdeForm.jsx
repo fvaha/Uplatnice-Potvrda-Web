@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Search, Printer, Receipt, X, History as HistoryIcon, FileText } from 'lucide-react'
+import { Search, Printer, Receipt, X, History as HistoryIcon, FileText, Save, PlusCircle } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { databaseService } from '../services/databaseService.js'
 import { generatePotvrdaHTML } from '../utils/printTemplates.js'
@@ -24,6 +24,7 @@ export default function PotvrdeForm({ onNavigate }) {
   const [printing, setPrinting] = useState(false)
   const [searchHistory, setSearchHistory] = useState([])
   const [showHistory, setShowHistory] = useState(false)
+  const [saveStatus, setSaveStatus] = useState('idle') // 'idle', 'success', 'error'
 
   // Form state
   const [formData, setFormData] = useState({
@@ -140,6 +141,49 @@ export default function PotvrdeForm({ onNavigate }) {
     } finally {
       setPrinting(false)
     }
+  }
+
+  const handleSave = async () => {
+    if (!formData.jmbg || !formData.sifra_akta || !formData.broj_prijave) {
+      alert('JMBG, Šifra akta i Broj prijave su obavezni za identifikaciju!')
+      return
+    }
+
+    try {
+      await databaseService.potvrde('upsert', formData)
+      console.log('Podaci uspešno sačuvani!')
+      setSaveStatus('success')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+
+      // Refresh search if applicable
+      if (searchQuery) {
+        handleSearch({ preventDefault: () => { } })
+      }
+    } catch (error) {
+      console.error('Save failed:', error)
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    }
+  }
+
+  const handleNewUser = () => {
+    setSelectedPotvrda(null)
+    setSaveStatus('idle')
+    setFormData({
+      jmbg: '',
+      pib: '',
+      obveznik: '',
+      adresa_obveznika: '',
+      adresa_objekta: '',
+      vrsta_nepokretnosti: '',
+      vrsta_prava: '',
+      oporeziva_povrsina: '',
+      sifra_akta: '',
+      broj_prijave: '',
+      svrha: 'DEČIJEG DODATKA',
+      svrha2: 'PREBIVALIŠTA',
+      status_lica: ''
+    })
   }
 
   return (
@@ -292,7 +336,21 @@ export default function PotvrdeForm({ onNavigate }) {
           <Card className="flex-shrink-0">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-base">Podaci o obvezniku</CardTitle>
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-base">Podaci o obvezniku</CardTitle>
+                  <div className="flex gap-1 ml-4">
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleNewUser}>
+                      <PlusCircle size={12} className="mr-1" /> Novi
+                    </Button>
+                    <div className="flex items-center gap-2">
+                      {saveStatus === 'success' && <span className="text-green-600 text-xs font-semibold animate-in fade-in zoom-in">Sačuvano!</span>}
+                      {saveStatus === 'error' && <span className="text-red-600 text-xs font-semibold animate-in fade-in zoom-in">Greška!</span>}
+                      <Button variant="default" size="sm" className="h-7 text-xs" onClick={handleSave}>
+                        <Save size={12} className="mr-1" /> Sačuvaj
+                      </Button>
+                    </div>
+                  </div>
+                </div>
                 {formData.status_lica && formData.status_lica.toUpperCase().includes('UMRL') && (
                   <div className="flex items-center gap-2 px-3 py-1 bg-red-500/10 border border-red-500/20 rounded-md">
                     <span className="text-red-600 dark:text-red-400 text-sm font-semibold">⚠ UMRLA OSOBA</span>

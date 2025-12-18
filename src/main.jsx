@@ -15,7 +15,7 @@ function initApp() {
   try {
     // Clear the root element before rendering React
     rootElement.innerHTML = ''
-    
+
     const root = createRoot(rootElement)
     root.render(
       <StrictMode>

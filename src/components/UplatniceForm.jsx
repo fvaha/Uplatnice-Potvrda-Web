@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Search, Printer, FileText, X, History as HistoryIcon } from 'lucide-react'
+import { Search, Printer, FileText, X, History as HistoryIcon, Save, PlusCircle } from 'lucide-react'
 import { useApp } from '../context/AppContext.jsx'
 import { databaseService } from '../services/databaseService.js'
 import { generateUplatnicaHTML } from '../utils/printTemplates.js'
@@ -38,6 +38,7 @@ export default function UplatniceForm({ onNavigate }) {
   const [printing, setPrinting] = useState(false)
   const [searchHistory, setSearchHistory] = useState([])
   const [showHistory, setShowHistory] = useState(false)
+  const [saveStatus, setSaveStatus] = useState('idle') // 'idle', 'success', 'error'
 
   // Form state
   const [formData, setFormData] = useState({
@@ -95,6 +96,8 @@ export default function UplatniceForm({ onNavigate }) {
       return
     }
 
+    console.log('Search initiated with term:', term)
+
     // Add to history
     if (!searchHistory.includes(term.trim())) {
       const newHistory = [term.trim(), ...searchHistory].slice(0, 5)
@@ -103,11 +106,14 @@ export default function UplatniceForm({ onNavigate }) {
     }
 
     try {
+      console.log('Calling databaseService.uplatnice("search", term)...')
       const data = await databaseService.uplatnice('search', term)
+      console.log('Search result:', data?.length || 0, 'items')
       setResults(data || [])
       setShowHistory(false)
     } catch (error) {
       console.error('Search failed:', error)
+      console.error('Error stack:', error.stack)
       setResults([])
     }
   }
@@ -277,6 +283,42 @@ export default function UplatniceForm({ onNavigate }) {
     }
   }
 
+  const handleSave = async () => {
+    if (!formData.jmbg) {
+      alert('JMBG je obavezan za identifikaciju!')
+      return
+    }
+
+    try {
+      await databaseService.uplatnice('upsert', formData)
+      console.log('Podaci uspešno sačuvani!')
+      setSaveStatus('success')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+
+      if (searchQuery) {
+        handleSearch({ preventDefault: () => { } })
+      }
+    } catch (error) {
+      console.error('Save failed:', error)
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    }
+  }
+
+  const handleNewUser = () => {
+    setSelectedPerson(null)
+    setSaveStatus('idle')
+    setFormData({
+      jmbg: '',
+      ime_i_prezime: '',
+      adresa: '',
+      poziv_na_broj: '79075',
+      reprogram: false,
+      stavke: {},
+      stampaStavka: null
+    })
+  }
+
   return (
     <div className="h-full flex flex-col p-4 w-full">
       {/* Header removed as requested */}
@@ -416,7 +458,21 @@ export default function UplatniceForm({ onNavigate }) {
           {/* Podaci o platiocu */}
           <Card className="flex-shrink-0">
             <CardHeader className="py-3 px-4 border-b bg-muted/30">
-              <CardTitle className="text-base">Podaci o platiocu</CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Podaci o platiocu</CardTitle>
+                <div className="flex gap-1">
+                  <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleNewUser}>
+                    <PlusCircle size={12} className="mr-1" /> Novi
+                  </Button>
+                  <div className="flex items-center gap-2">
+                    {saveStatus === 'success' && <span className="text-green-600 text-xs font-semibold animate-in fade-in zoom-in">Sačuvano!</span>}
+                    {saveStatus === 'error' && <span className="text-red-600 text-xs font-semibold animate-in fade-in zoom-in">Greška!</span>}
+                    <Button variant="default" size="sm" className="h-7 text-xs" onClick={handleSave}>
+                      <Save size={12} className="mr-1" /> Sačuvaj
+                    </Button>
+                  </div>
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="p-3">
               <div className="grid grid-cols-12 gap-3">

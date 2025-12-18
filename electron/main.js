@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, Menu, globalShortcut, nativeTheme } from 'electron'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { existsSync } from 'fs'
@@ -24,14 +24,13 @@ function createWindow() {
       const projectRoot = process.cwd()
       const absolutePreloadPath = join(projectRoot, 'out', 'preload', 'index.js')
 
-      if (existsSync(absolutePreloadPath)) {
-        preloadPath = absolutePreloadPath
-      } else {
-        // Fallback to relative path
-        preloadPath = join(__dirname, '../preload/index.js')
-      }
+      preloadPath = existsSync(absolutePreloadPath)
+        ? absolutePreloadPath
+        : join(__dirname, '../preload/index.js')
     } else {
-      preloadPath = join(__dirname, 'preload.js')
+      // In packaged app preload is at out/preload/index.js relative to out/main/
+      const packagedPreload = join(__dirname, '../preload/index.js')
+      preloadPath = packagedPreload
     }
 
     const iconPath = join(__dirname, '../resources/icon.png')
@@ -46,8 +45,10 @@ function createWindow() {
         contextIsolation: true,
         devTools: isDev // Disable DevTools in production
       },
+      frame: true,
+      transparent: false,
+      backgroundColor: '#ffffff',
       titleBarStyle: 'default',
-      backgroundColor: '#0a0a0a',
       show: false, // Don't show until ready for faster perceived load
       autoHideMenuBar: false,
       center: true,
@@ -146,7 +147,7 @@ function createWindow() {
         join(__dirname, '../../renderer/index.html'),
         join(app.getAppPath(), 'out/renderer/index.html')
       ]
-      
+
       let loaded = false
       for (const path of possiblePaths) {
         if (existsSync(path)) {
@@ -155,12 +156,12 @@ function createWindow() {
           break
         }
       }
-      
+
       if (!loaded) {
         // Fallback to first path
         mainWindow.loadFile(possiblePaths[0])
       }
-      
+
       // Show window when ready for faster perceived load
       mainWindow.once('ready-to-show', () => {
         mainWindow.show()
@@ -419,7 +420,11 @@ app.on('window-all-closed', () => {
   }
 })
 
-// IPC Handlers
+// Theme sync
+ipcMain.on('set-native-theme', (event, theme) => {
+  nativeTheme.themeSource = theme
+})
+
 ipcMain.handle('get-printers', async () => {
   return mainWindow.webContents.getPrintersAsync()
 })
@@ -472,43 +477,52 @@ ipcMain.handle('select-excel-file', async () => {
 
 ipcMain.handle('import-excel', async (event, { filePath, type, mode }) => {
   try {
+    console.log('Import Excel:', filePath, type, mode)
+    if (!db) return { success: false, error: '' }
     const result = await importExcelFile(filePath, type, mode, db)
+    console.log('Import result:', result)
     return { success: true, ...result }
   } catch (error) {
+    console.error('Import error:', error)
     return { success: false, error: error.message }
   }
 })
 
 ipcMain.handle('db-query', async (event, { table, method, args }) => {
   try {
+    console.log(`[IPC] db-query: table=${table}, method=${method}`)
     if (!db) {
-      console.warn('Database not initialized, returning empty result')
+      console.warn('[IPC] Database not initialized')
       return []
     }
+
+    let result
     if (table === 'uplatnice') {
       if (!db.uplatnice || !db.uplatnice[method]) {
         throw new Error(`Method ${method} not found on uplatnice service`)
       }
-      // Handle different method signatures
       if (args && Array.isArray(args) && args.length > 0) {
-        return db.uplatnice[method](...args)
+        result = db.uplatnice[method](...args)
       } else {
-        return db.uplatnice[method]()
+        result = db.uplatnice[method]()
       }
     } else if (table === 'potvrde') {
       if (!db.potvrde || !db.potvrde[method]) {
         throw new Error(`Method ${method} not found on potvrde service`)
       }
-      // Handle different method signatures
       if (args && Array.isArray(args) && args.length > 0) {
-        return db.potvrde[method](...args)
+        result = db.potvrde[method](...args)
       } else {
-        return db.potvrde[method]()
+        result = db.potvrde[method]()
       }
+    } else {
+      throw new Error(`Unknown table: ${table}`)
     }
-    throw new Error(`Unknown table: ${table}`)
+
+    console.log(`[IPC] db-query success: ${method}`)
+    return result
   } catch (error) {
-    console.error('db-query error:', error)
+    console.error('[IPC] db-query error:', error)
     throw new Error(error.message)
   }
 })
@@ -530,15 +544,47 @@ ipcMain.handle('get-db-stats', async () => {
 
 ipcMain.handle('migrate-excel-to-db', async (event, { filePath, type }) => {
   try {
-    const __filename = fileURLToPath(import.meta.url)
-    const __dirname = dirname(__filename)
-    const projectRoot = process.cwd() // In development, use cwd
+    const userDataPath = app.getPath('userData')
+    const dbDir = join(userDataPath, 'database')
 
-    const result = await migrateExcelToDb(filePath, type, projectRoot)
+    // Ensure dbDir exists
+    if (!existsSync(dbDir)) {
+      // mkdirSync(dbDir, { recursive: true }) // Not needed here as migrateToDb handles file creation, but usually good practice. 
+      // Actually migrateExcelToDb takes projectRoot and joins 'uplatnice.db'. 
+      // We want it to be inside 'database' folder in userData.
+    }
+
+    // We pass dbDir as projectRoot so it creates/updates db files inside userData/database
+    const result = await migrateExcelToDb(filePath, type, dbDir)
     return { success: true, ...result }
   } catch (error) {
     console.error('migrate-excel-to-db error:', error)
     return { success: false, error: error.message }
+  }
+})
+
+function registerShortcuts() {
+  globalShortcut.unregister('F12')
+  globalShortcut.register('F12', () => {
+    if (mainWindow) {
+      mainWindow.webContents.openDevTools({ mode: 'detach' })
+    }
+  })
+}
+
+app.whenReady().then(() => {
+  createWindow()
+  registerShortcuts()
+
+  app.on('activate', function () {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+app.on('window-all-closed', () => {
+  globalShortcut.unregisterAll()
+  if (process.platform !== 'darwin') {
+    app.quit()
   }
 })
 

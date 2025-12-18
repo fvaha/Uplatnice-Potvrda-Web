@@ -6,6 +6,7 @@ const AppContext = createContext()
 export function AppProvider({ children }) {
   const [dbStats, setDbStats] = useState({ uplatnice: 0, potvrde: 0 })
   const [printers, setPrinters] = useState([])
+  const [printersLoading, setPrintersLoading] = useState(false)
   const [selectedPrinters, setSelectedPrinters] = useState({
     potvrde: null,
     uplatnice: null
@@ -13,10 +14,8 @@ export function AppProvider({ children }) {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    // Load immediately - no delay for faster startup
     loadPrinterSettings()
     loadTaxPrices()
-    // Load async data in background
     loadStats()
     loadPrinters()
   }, [])
@@ -25,8 +24,6 @@ export function AppProvider({ children }) {
     taksa_300: 300,
     taksa_400: 400
   })
-
-  // ... (listeners) ...
 
   const loadTaxPrices = () => {
     const saved = localStorage.getItem('taxPrices')
@@ -40,7 +37,6 @@ export function AppProvider({ children }) {
     localStorage.setItem('taxPrices', JSON.stringify(prices))
   }
 
-  // Listen for printer selection from Electron menu
   useEffect(() => {
     if (typeof window !== 'undefined' && window.electronAPI && window.electronAPI.onSetPrinter) {
       window.electronAPI.onSetPrinter((data) => {
@@ -66,21 +62,26 @@ export function AppProvider({ children }) {
       }
     } catch (error) {
       console.error('Failed to load stats:', error)
-      // Set default stats on error
       setDbStats({ uplatnice: 0, potvrde: 0 })
     }
   }
 
   const loadPrinters = async () => {
     try {
-      if (typeof window !== 'undefined' && window.electronAPI) {
-        const printerList = await window.electronAPI.getPrinters()
-        setPrinters(printerList)
-      } else {
+      const isElectron = typeof window !== 'undefined' && window.electronAPI
+      if (!isElectron) {
         setPrinters([])
+        return
       }
+
+      setPrintersLoading(true)
+      const printerList = await window.electronAPI.getPrinters()
+      setPrinters(Array.isArray(printerList) ? printerList : [])
     } catch (error) {
       console.error('Failed to load printers:', error)
+      setPrinters([])
+    } finally {
+      setPrintersLoading(false)
     }
   }
 
@@ -105,6 +106,7 @@ export function AppProvider({ children }) {
       value={{
         dbStats,
         printers,
+        printersLoading,
         selectedPrinters,
         loading,
         setLoading,
@@ -112,7 +114,7 @@ export function AppProvider({ children }) {
         savePrinterSettings,
         loadPrinters,
         taxPrices,
-        saveTaxPrices
+        saveTaxPrices,
       }}
     >
       {children}
@@ -127,4 +129,3 @@ export function useApp() {
   }
   return context
 }
-
