@@ -4,14 +4,18 @@ import { generateNBSQR } from './nbsQRGenerator.js'
 
 export async function generateUplatnicaHTML(data) {
   // Determine items to list
-  const items = data.items || [{ opis: data.stavka || 'UPLATA', iznos: data.iznos || 0 }]
+  const items = data.items || (data.stavka && data.iznos ? [{ opis: data.stavka, iznos: data.iznos }] : [])
 
-  // Calculate total
-  const total = items.reduce((sum, item) => sum + (parseFloat(item.iznos) || 0), 0)
+  // Filter out items with zero or invalid amounts
+  const validItems = items.filter(item => parseFloat(item.iznos) > 0)
+  
+  // Calculate total from valid items only
+  const total = validItems.reduce((sum, item) => sum + (parseFloat(item.iznos) || 0), 0)
   const totalFmt = total.toFixed(2).replace('.', ',')
   
   // Za zbirnu uplatnicu (više stavki), polja u nalogu za uplatu treba da budu prazna
-  const isZbirnaUplatnica = items.length > 1
+  // Ako nema validnih stavki, tretiraj kao zbirnu uplatnicu bez selektovanih stavki
+  const isZbirnaUplatnica = validItems.length > 1 || validItems.length === 0
   
   // Bottom slip amount logic
   // If explicitly requested to hide amount (multi-item mode), leave empty
@@ -22,7 +26,7 @@ export async function generateUplatnicaHTML(data) {
   const iznosQR = total.toFixed(2).replace('.', ',')
 
   // Za zbirnu uplatnicu, svrha uplate u nalogu za uplatu treba da bude prazna
-  const stavka = items.length === 1 ? items[0].opis : 'UPLATA PO ZADUŽENJU'
+  const stavka = validItems.length === 1 ? validItems[0].opis : 'UPLATA PO ZADUŽENJU'
   const stavkaNalog = isZbirnaUplatnica ? '' : stavka
   
   const platioc = `${data.ime_i_prezime || ''}, ${data.adresa || ''}`.trim()
@@ -30,8 +34,8 @@ export async function generateUplatnicaHTML(data) {
   
   // Za pojedinačnu stavku, koristi račun za tu stavku, inače default
   // Ako ima samo jedna stavka, koristi račun iz te stavke ako postoji taxType
-  const racun = items.length === 1 && items[0].taxType 
-    ? getAccountNumberForTax(items[0].taxType) 
+  const racun = validItems.length === 1 && validItems[0].taxType 
+    ? getAccountNumberForTax(validItems[0].taxType) 
     : (data.taxType ? getAccountNumberForTax(data.taxType) : '840-742251843-73')
   // Za zbirnu uplatnicu, račun primaoca treba da bude prazan (korisnik može da unese bilo koji)
   const racunNalog = isZbirnaUplatnica ? '' : racun
@@ -39,8 +43,8 @@ export async function generateUplatnicaHTML(data) {
   const sifra = '153'
   const model = '97'
   // Ako ima samo jedna stavka, koristi poziv na broj iz te stavke ako postoji
-  const poziv = items.length === 1 && items[0].poziv_na_broj 
-    ? items[0].poziv_na_broj 
+  const poziv = validItems.length === 1 && validItems[0].poziv_na_broj 
+    ? validItems[0].poziv_na_broj 
     : (data.poziv_na_broj || '')
   // Za zbirnu uplatnicu, poziv na broj u nalogu za uplatu treba da bude prazan
   const pozivNalog = isZbirnaUplatnica ? '' : poziv
@@ -57,7 +61,7 @@ export async function generateUplatnicaHTML(data) {
   // NBS: Name of payee - definisan na nivou funkcije da bude dostupan svuda
   const n_primalac = "GRAD NOVI PAZAR"
   
-  if (!isZbirnaUplatnica) {
+  if (!isZbirnaUplatnica && total > 0) {
     // 1. Format Account: Must be 18 digits. 840-742251843-73 -> 840000074225184373
     const parts = racun.split('-')
     const bank = parts[0]
@@ -96,10 +100,13 @@ export async function generateUplatnicaHTML(data) {
     // Format Amount: Prema NBS IPS standardu, iznos treba da bude samo broj sa tačkom kao decimalnim separatorom
     const matrixIpsAmount = total.toFixed(2)
     
-    // Generiši mali QR kod za matricni štampač (manji da ne troši mnogo tonera)
-    // NBS IPS format: K:PR|V:01|C:1|R:račun|N:naziv|I:iznos|SF:šifra|S:svrha|RO:model|P:poziv
-    const matrixQRString = `K:PR|V:01|C:1|R:${matrixIpsAccount}|N:${n_primalac}|I:${matrixIpsAmount}|SF:${sifra}|S:${sanitize(stavka)}|RO:${model}|P:${sanitize(matrixPoziv)}`
-    const matrixQRUrl = await generateNBSQR(matrixQRString, 120)
+    // Generiši mali QR kod za matricni štampač samo ako je iznos > 0
+    let matrixQRUrl = ''
+    if (total > 0) {
+      // NBS IPS format: K:PR|V:01|C:1|R:račun|N:naziv|I:iznos|SF:šifra|S:svrha|RO:model|P:poziv
+      const matrixQRString = `K:PR|V:01|C:1|R:${matrixIpsAccount}|N:${n_primalac}|I:${matrixIpsAmount}|SF:${sifra}|S:${sanitize(stavka)}|RO:${model}|P:${sanitize(matrixPoziv)}`
+      matrixQRUrl = await generateNBSQR(matrixQRString, 120)
+    }
     
     return `
 <!DOCTYPE html>
@@ -133,21 +140,21 @@ export async function generateUplatnicaHTML(data) {
     /* QR kod za matricni štampač - mali da ne troši mnogo tonera */
     .qr-code-matrix {
       position: absolute;
-      top: 50mm;
+      bottom: 10mm;
       right: 10mm;
       width: 25mm;
       height: 25mm;
     }
     
-    /* Info sekcija uz središnju liniju */
+    /* Info sekcija uz središnju liniju - ista pozicija kao u glavnom template-u */
     .info-section-matrix {
       position: absolute;
-      top: 50mm;
-      left: 50%;
+      bottom: 10mm;
+      left: 0;
       margin-left: 5mm;
-      width: 50mm;
-      font-size: 9pt;
-      line-height: 1.1;
+      width: 60mm;
+      font-size: 7pt;
+      line-height: 1.2;
       color: #333;
       font-family: 'Courier New', Courier, monospace;
     }
@@ -193,10 +200,7 @@ export async function generateUplatnicaHTML(data) {
     <div class="field model-box data-text">${model}</div>
     <div class="field poziv-box data-text">${matrixPoziv}</div>
     
-    <!-- NBS QR kod za matricni štampač - mali -->
-    <img src="${matrixQRUrl}" class="qr-code-matrix" alt="NBS IPS QR" />
-    
-    <!-- Info sekcija desno od QR koda -->
+    <!-- Info sekcija uz srednju liniju - levo od QR koda -->
     <div class="info-section-matrix">
       <div>Grad Novi Pazar</div>
       <div>Uprava za naplatu javnih prihoda</div>
@@ -205,6 +209,11 @@ export async function generateUplatnicaHTML(data) {
       <div>www.nplpa.rs</div>
       <div>info@nplpa.rs</div>
     </div>
+    
+    <!-- NBS QR kod za matricni štampač - mali (samo ako postoji) -->
+    ${matrixQRUrl ? `<img src="${matrixQRUrl}" class="qr-code-matrix" alt="NBS IPS QR" />` : ''}
+    ${matrixQRUrl ? `<div style="position:absolute; bottom:5mm; right:35mm; font-size:5pt;">Obrazac br. 1</div>` : ''}
+    ${matrixQRUrl ? `<div style="position:absolute; bottom:5mm; right: 10mm; font-size:5pt; text-align:center; width:25mm;">NBS IPS QR</div>` : ''}
   </div>
 </body>
 </html>
@@ -233,28 +242,40 @@ export async function generateUplatnicaHTML(data) {
   }
 
   // Generate table rows for A4 - sada async
-  const rowsPromises = items.map(async item => {
-    const itemPoziv = item.poziv_na_broj || poziv
-    const itemQR = await generateQRForItem(item)
-    // Koristi račun za ovu stavku
-    const itemRacun = item.taxType ? getAccountNumberForTax(item.taxType) : racun
-    return `
+  let rows = ''
+  if (validItems.length === 0) {
+    // Ako nema validnih stavki, prikaži poruku u tabeli
+    rows = `
     <tr>
-      <td>
-        <div style="display: flex; align-items: flex-start; gap: 10px;">
-          <img src="${itemQR}" alt="QR" style="width: 20mm; height: 20mm; flex-shrink: 0;" />
-          <div style="flex: 1;">
-            <strong>${item.opis}</strong><br>
-            <span style="font-size:9pt; color:#666;">Račun: ${itemRacun} | Poziv na broj: ${itemPoziv} | Model: ${model}</span>
-          </div>
-        </div>
+      <td colspan="2" style="text-align: center; padding: 40px; color: #666; font-style: italic;">
+        Nema selektovanih poreskih oblika za prikaz.
       </td>
-      <td class="amount">${parseFloat(item.iznos || 0).toFixed(2).replace('.', ',')}</td>
     </tr>
     `
-  })
-  
-  const rows = (await Promise.all(rowsPromises)).join('')
+  } else {
+    const rowsPromises = validItems.map(async item => {
+      const itemPoziv = item.poziv_na_broj || poziv
+      const itemQR = await generateQRForItem(item)
+      // Koristi račun za ovu stavku
+      const itemRacun = item.taxType ? getAccountNumberForTax(item.taxType) : racun
+      return `
+      <tr>
+        <td>
+          <div style="display: flex; align-items: flex-start; gap: 10px;">
+            <img src="${itemQR}" alt="QR" style="width: 20mm; height: 20mm; flex-shrink: 0;" />
+            <div style="flex: 1;">
+              <strong>${item.opis}</strong><br>
+              <span style="font-size:9pt; color:#666;">Račun: ${itemRacun} | Poziv na broj: ${itemPoziv} | Model: ${model}</span>
+            </div>
+          </div>
+        </td>
+        <td class="amount">${parseFloat(item.iznos || 0).toFixed(2).replace('.', ',')}</td>
+      </tr>
+      `
+    })
+    
+    rows = (await Promise.all(rowsPromises)).join('')
+  }
 
   return `
 <!DOCTYPE html>
@@ -463,11 +484,15 @@ export async function generateUplatnicaHTML(data) {
       min-height: 22px;
       display: flex;
       align-items: center;
+      justify-content: flex-start;
+      text-align: left;
       background: #fff;
     }
     .input-box.multiline {
       height: 45px;
       align-items: flex-start;
+      justify-content: flex-start;
+      text-align: left;
       font-size: 10pt;
     }
     .header-title-nalog {
@@ -498,11 +523,22 @@ export async function generateUplatnicaHTML(data) {
     }
     .info-section-zbirno {
       position: absolute;
-      bottom: 10px;
-      left: 50%;
+      bottom: 30px;
+      left: 0;
       margin-left: 5mm;
       width: 60mm;
-      font-size: 10pt;
+      font-size: 7pt;
+      line-height: 1.2;
+      color: #333;
+      font-family: 'Courier New', Courier, monospace;
+    }
+    .info-section-single {
+      position: absolute;
+      bottom: 30px;
+      left: 0;
+      margin-left: 5mm;
+      width: 60mm;
+      font-size: 7pt;
       line-height: 1.2;
       color: #333;
       font-family: 'Courier New', Courier, monospace;
@@ -648,7 +684,7 @@ export async function generateUplatnicaHTML(data) {
             </div>
             <div class="col" style="flex: 1">
               <div class="section-label">iznos</div>
-              <div class="input-box" style="justify-content:flex-end;">${iznosSlip}</div>
+              <div class="input-box" style="justify-content:flex-start;">${iznosSlip}</div>
             </div>
           </div>
 
@@ -661,13 +697,25 @@ export async function generateUplatnicaHTML(data) {
             <div class="input-box" style="flex: 1; margin-left:5px;">${pozivNalog}</div>
           </div>
           
-          <!-- QR CODE - prikazuje se samo za pojedinačne uplatnice -->
+          <!-- INFO SEKCIJA - prikazuje se uvek (i sa QR kodom i bez) -->
+          ${!isZbirnaUplatnica ? `
+          <div class="info-section-single">
+            <div>Grad Novi Pazar</div>
+            <div>Uprava za naplatu javnih prihoda</div>
+            <div>7. Juli bb, 36300 Novi Pazar</div>
+            <div>Radno vreme: 07:30 - 15:00</div>
+            <div>www.nplpa.rs</div>
+            <div>info@nplpa.rs</div>
+          </div>
+          ` : ''}
+          
+          <!-- QR CODE - prikazuje se samo za pojedinačne uplatnice (jedna stavka) -->
           ${qrUrl ? `<img src="${qrUrl}" class="qr-code" alt="NBS IPS QR" />` : ''}
           ${qrUrl ? `<div style="position:absolute; bottom:10px; right:34mm; font-size:6pt;">Obrazac br. 1</div>` : ''}
           ${qrUrl ? `<div style="position:absolute; bottom:10px; right: 10px; font-size:6pt; text-align:center; width:32mm;">NBS IPS QR</div>` : ''}
           
-          <!-- INFO SEKCIJA - prikazuje se samo za zbirne uplatnice (kada nema QR koda) -->
-          ${!qrUrl && isZbirnaUplatnica ? `
+          <!-- INFO SEKCIJA - prikazuje se za zbirne uplatnice (više stavki, nema QR koda) -->
+          ${isZbirnaUplatnica ? `
           <div class="info-section-zbirno">
             <div>Grad Novi Pazar</div>
             <div>Uprava za naplatu javnih prihoda</div>
