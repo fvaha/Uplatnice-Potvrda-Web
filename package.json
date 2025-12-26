@@ -8,6 +8,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:web": "NODE_ENV=production vite build",
+    "build:web:deploy": "bash HELPERS/build-web.sh",
     "preview": "vite preview",
     "electron:dev": "electron-vite dev",
     "electron:build": "electron-vite build",
@@ -33,6 +35,7 @@
     "better-sqlite3": "^12.5.0",
     "dexie": "^4.2.1",
     "framer-motion": "^12.23.25",
+    "qrcode": "^1.5.4",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "xlsx": "^0.18.5"
@@ -75,7 +78,8 @@
       "node_modules/better-sqlite3/**/*",
       "node_modules/bindings/**/*",
       "node_modules/file-uri-to-path/**/*",
-      "node_modules/xlsx/**/*"
+      "node_modules/xlsx/**/*",
+      "node_modules/qrcode/**/*"
     ],
     "asarUnpack": [
       "**/better-sqlite3/**/*",

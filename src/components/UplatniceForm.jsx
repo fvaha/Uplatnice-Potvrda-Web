@@ -5,6 +5,7 @@ import { useApp } from '../context/AppContext.jsx'
 import { databaseService } from '../services/databaseService.js'
 import { generateUplatnicaHTML } from '../utils/printTemplates.js'
 import { generatePozivNaBroj, generateAdminTaksaPozivNaBroj, getTaxLabel } from '../utils/pozivNaBroj.js'
+import { printHTML, downloadHTMLAsPDF } from '../utils/printUtils.js'
 import { Button } from './ui/button.jsx'
 import { Input } from './ui/input.jsx'
 import { Label } from './ui/label.jsx'
@@ -53,11 +54,19 @@ export default function UplatniceForm({ onNavigate }) {
   })
 
   const [checkedItems, setCheckedItems] = useState({})
+  const [reprogramStavke, setReprogramStavke] = useState({}) // Pojedinačne reprogram opcije za svaku stavku
 
   const toggleCheck = (id) => {
     setCheckedItems(prev => ({
       ...prev,
       [id]: !prev[id]
+    }))
+  }
+
+  const toggleReprogramStavka = (stavkaId) => {
+    setReprogramStavke(prev => ({
+      ...prev,
+      [stavkaId]: !prev[stavkaId]
     }))
   }
 
@@ -88,6 +97,7 @@ export default function UplatniceForm({ onNavigate }) {
         reprogram: false,
         stavke: {}
       }))
+      setReprogramStavke({})
     }
   }, [selectedPerson])
 
@@ -96,7 +106,8 @@ export default function UplatniceForm({ onNavigate }) {
     if (formData.jmbg && formData.jmbg.replace(/\D/g, '').length === 13) {
       // Generiši za porez kao default (najčešći)
       const cleanJMBG = formData.jmbg.replace(/\D/g, '')
-      const newPoziv = generatePozivNaBroj('iznos_poreza', cleanJMBG, formData.reprogram)
+      const porezReprogram = reprogramStavke['iznos_poreza'] || false
+      const newPoziv = generatePozivNaBroj('iznos_poreza', cleanJMBG, porezReprogram)
       if (newPoziv && newPoziv !== formData.poziv_na_broj) {
         setFormData(prev => ({ ...prev, poziv_na_broj: newPoziv }))
       }
@@ -106,7 +117,24 @@ export default function UplatniceForm({ onNavigate }) {
         setFormData(prev => ({ ...prev, poziv_na_broj: '' }))
       }
     }
-  }, [formData.jmbg, formData.reprogram])
+  }, [formData.jmbg, reprogramStavke])
+
+  // Kada se cekira globalni reprogram, cekiraj sve stavke (osim administrativne takse)
+  useEffect(() => {
+    if (formData.reprogram) {
+      const newReprogramStavke = {}
+      // Dodaj sve stavke koje nisu administrativna taksa
+      Object.keys(ITEMS_MAP).forEach(key => {
+        if (key !== 'taksa_300' && key !== 'taksa_400' && key.startsWith('iznos_')) {
+          newReprogramStavke[key] = true
+        }
+      })
+      setReprogramStavke(newReprogramStavke)
+    } else {
+      // Kada se odcekira globalni reprogram, odcekiraj sve
+      setReprogramStavke({})
+    }
+  }, [formData.reprogram])
 
   const handleSearch = async (e, directTerm = null) => {
     e.preventDefault()
@@ -169,11 +197,15 @@ export default function UplatniceForm({ onNavigate }) {
       return ''
     }
     
+    // Koristi pojedinačnu reprogram opciju za ovu stavku, ili globalnu ako nije postavljena
+    const isReprogram = reprogramStavke[taxType] !== undefined ? reprogramStavke[taxType] : formData.reprogram
+    
     if (taxType === 'taksa_300' || taxType === 'taksa_400') {
-      return generateAdminTaksaPozivNaBroj(formData.jmbg, formData.reprogram)
+      // Administrativna taksa nema reprogram opciju
+      return generateAdminTaksaPozivNaBroj(formData.jmbg, false)
     }
     
-    return generatePozivNaBroj(taxType, formData.jmbg, formData.reprogram)
+    return generatePozivNaBroj(taxType, formData.jmbg, isReprogram)
   }
 
   const handlePrintChecked = async () => {
@@ -190,14 +222,16 @@ export default function UplatniceForm({ onNavigate }) {
         if (key === 'taksa_300') amount = taxPrices?.taksa_300 || 300
         if (key === 'taksa_400') amount = taxPrices?.taksa_400 || 400
 
-        // Generiši poziv na broj za svaku stavku
+        // Generiši poziv na broj za svaku stavku sa pojedinačnom reprogram opcijom
         const pozivNaBroj = getPozivNaBrojForTax(key)
+        const isReprogram = reprogramStavke[key] !== undefined ? reprogramStavke[key] : false
 
         return {
           opis: ITEMS_MAP[key] || key.toUpperCase(),
           iznos: amount,
           poziv_na_broj: pozivNaBroj,
-          taxType: key // Sačuvaj tip poreza za QR kod generisanje
+          taxType: key, // Sačuvaj tip poreza za QR kod generisanje
+          reprogram: isReprogram
         }
       })
       .filter(item => item.iznos)
@@ -216,29 +250,19 @@ export default function UplatniceForm({ onNavigate }) {
       const printData = {
         ...selectedPerson,
         poziv_na_broj: formData.poziv_na_broj, // Default poziv (za backward compatibility)
-        reprogram: formData.reprogram ? 'DA' : 'NE',
+        reprogram: formData.reprogram ? 'DA' : 'NE', // Globalna opcija (za backward compatibility)
         items: itemsToPrint,
         hideAmountOnSlip: false
       }
 
-      const html = generateUplatnicaHTML(printData)
+      const html = await generateUplatnicaHTML(printData)
 
-      if (isElectron && window.electronAPI) {
-        await window.electronAPI.printSilent({
-          html,
-          printerName,
-          silent: true
-        })
-      } else {
-        const printWindow = window.open('', '_blank')
-        printWindow.document.write(html)
-        printWindow.document.close()
-        printWindow.focus()
-        setTimeout(() => {
-          printWindow.print()
-          printWindow.close()
-        }, 250)
-      }
+      // Use print utility which handles both Electron and web
+      await printHTML(html, {
+        printerName,
+        silent: true,
+        showPrintDialog: true
+      })
     } catch (error) {
       console.error('Print failed:', error)
       alert('Greška pri štampanju: ' + error.message)
@@ -279,34 +303,27 @@ export default function UplatniceForm({ onNavigate }) {
       // Matrix Printer (Epson PLQ-20)
       const printerName = selectedPrinters.uplatnice || 'default'
 
+      // Koristi pojedinačnu reprogram opciju za ovu stavku
+      const isReprogram = reprogramStavke[field] !== undefined ? reprogramStavke[field] : formData.reprogram
+      
       const printData = {
         ...selectedPerson,
         poziv_na_broj: pozivNaBroj || formData.poziv_na_broj,
-        reprogram: formData.reprogram ? 'DA' : 'NE',
+        reprogram: isReprogram ? 'DA' : 'NE',
         stavka: label,
         iznos: iznos,
         matrix: true, // Force matrix template (Slip Only, No QR, Fixed Size)
         taxType: field // Sačuvaj tip poreza za QR kod generisanje
       }
 
-      const html = generateUplatnicaHTML(printData)
+      const html = await generateUplatnicaHTML(printData)
 
-      if (isElectron && window.electronAPI) {
-        await window.electronAPI.printSilent({
-          html,
-          printerName,
-          silent: true
-        })
-      } else {
-        const printWindow = window.open('', '_blank')
-        printWindow.document.write(html)
-        printWindow.document.close()
-        printWindow.focus()
-        setTimeout(() => {
-          printWindow.print()
-          printWindow.close()
-        }, 250)
-      }
+      // Use print utility which handles both Electron and web
+      await printHTML(html, {
+        printerName,
+        silent: true,
+        showPrintDialog: true
+      })
     } catch (error) {
       console.error('Print failed:', error)
       alert('Greška pri štampanju: ' + error.message)
@@ -349,6 +366,7 @@ export default function UplatniceForm({ onNavigate }) {
       stavke: {},
       stampaStavka: null
     })
+    setReprogramStavke({})
   }
 
   return (
@@ -612,15 +630,27 @@ export default function UplatniceForm({ onNavigate }) {
             <CardContent className="pt-0">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <input
-                      type="checkbox"
-                      id="cb_porez"
-                      checked={!!checkedItems['iznos_poreza']}
-                      onChange={() => toggleCheck('iznos_poreza')}
-                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
-                    />
-                    <Label htmlFor="porez" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_poreza')}>IZNOS POREZA:</Label>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="cb_porez"
+                        checked={!!checkedItems['iznos_poreza']}
+                        onChange={() => toggleCheck('iznos_poreza')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="porez" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_poreza')}>IZNOS POREZA:</Label>
+                    </div>
+                    <div className="flex items-center gap-2 ml-auto -mr-2">
+                      <input
+                        type="checkbox"
+                        id="reprogram_porez"
+                        checked={!!reprogramStavke['iznos_poreza']}
+                        onChange={() => toggleReprogramStavka('iznos_poreza')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="reprogram_porez" className="text-xs cursor-pointer uppercase">REPROGRAM</Label>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <Input
@@ -643,15 +673,27 @@ export default function UplatniceForm({ onNavigate }) {
                 </div>
 
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <input
-                      type="checkbox"
-                      id="cb_eko"
-                      checked={!!checkedItems['iznos_eko']}
-                      onChange={() => toggleCheck('iznos_eko')}
-                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
-                    />
-                    <Label htmlFor="eko" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_eko')}>IZNOS EKO:</Label>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="cb_eko"
+                        checked={!!checkedItems['iznos_eko']}
+                        onChange={() => toggleCheck('iznos_eko')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="eko" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_eko')}>IZNOS EKO:</Label>
+                    </div>
+                    <div className="flex items-center gap-2 ml-auto -mr-2">
+                      <input
+                        type="checkbox"
+                        id="reprogram_eko"
+                        checked={!!reprogramStavke['iznos_eko']}
+                        onChange={() => toggleReprogramStavka('iznos_eko')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="reprogram_eko" className="text-xs cursor-pointer uppercase">REPROGRAM</Label>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <Input
@@ -674,15 +716,27 @@ export default function UplatniceForm({ onNavigate }) {
                 </div>
 
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <input
-                      type="checkbox"
-                      id="cb_zemljiste"
-                      checked={!!checkedItems['iznos_zemljiste']}
-                      onChange={() => toggleCheck('iznos_zemljiste')}
-                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
-                    />
-                    <Label htmlFor="zemljiste" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_zemljiste')}>IZNOS G. ZEMLJIŠTA:</Label>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="cb_zemljiste"
+                        checked={!!checkedItems['iznos_zemljiste']}
+                        onChange={() => toggleCheck('iznos_zemljiste')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="zemljiste" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_zemljiste')}>IZNOS G. ZEMLJIŠTA:</Label>
+                    </div>
+                    <div className="flex items-center gap-2 ml-auto -mr-2">
+                      <input
+                        type="checkbox"
+                        id="reprogram_zemljiste"
+                        checked={!!reprogramStavke['iznos_zemljiste']}
+                        onChange={() => toggleReprogramStavka('iznos_zemljiste')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="reprogram_zemljiste" className="text-xs cursor-pointer uppercase">REPROGRAM</Label>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <Input
@@ -705,15 +759,27 @@ export default function UplatniceForm({ onNavigate }) {
                 </div>
 
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <input
-                      type="checkbox"
-                      id="cb_kom_takse"
-                      checked={!!checkedItems['iznos_kom_takse']}
-                      onChange={() => toggleCheck('iznos_kom_takse')}
-                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
-                    />
-                    <Label htmlFor="kom_takse" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_kom_takse')}>IZNOS KOM. TAKSE:</Label>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="cb_kom_takse"
+                        checked={!!checkedItems['iznos_kom_takse']}
+                        onChange={() => toggleCheck('iznos_kom_takse')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="kom_takse" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_kom_takse')}>IZNOS KOM. TAKSE:</Label>
+                    </div>
+                    <div className="flex items-center gap-2 ml-auto -mr-2">
+                      <input
+                        type="checkbox"
+                        id="reprogram_kom_takse"
+                        checked={!!reprogramStavke['iznos_kom_takse']}
+                        onChange={() => toggleReprogramStavka('iznos_kom_takse')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="reprogram_kom_takse" className="text-xs cursor-pointer uppercase">REPROGRAM</Label>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <Input
@@ -736,15 +802,27 @@ export default function UplatniceForm({ onNavigate }) {
                 </div>
 
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <input
-                      type="checkbox"
-                      id="cb_samodoprinos"
-                      checked={!!checkedItems['iznos_samodoprinos']}
-                      onChange={() => toggleCheck('iznos_samodoprinos')}
-                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
-                    />
-                    <Label htmlFor="samodoprinos" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_samodoprinos')}>IZNOS SAMODOPRINOS:</Label>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="cb_samodoprinos"
+                        checked={!!checkedItems['iznos_samodoprinos']}
+                        onChange={() => toggleCheck('iznos_samodoprinos')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="samodoprinos" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_samodoprinos')}>IZNOS SAMODOPRINOS:</Label>
+                    </div>
+                    <div className="flex items-center gap-2 ml-auto -mr-2">
+                      <input
+                        type="checkbox"
+                        id="reprogram_samodoprinos"
+                        checked={!!reprogramStavke['iznos_samodoprinos']}
+                        onChange={() => toggleReprogramStavka('iznos_samodoprinos')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="reprogram_samodoprinos" className="text-xs cursor-pointer uppercase">REPROGRAM</Label>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <Input
@@ -767,15 +845,27 @@ export default function UplatniceForm({ onNavigate }) {
                 </div>
 
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <input
-                      type="checkbox"
-                      id="cb_sume"
-                      checked={!!checkedItems['iznos_sume']}
-                      onChange={() => toggleCheck('iznos_sume')}
-                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
-                    />
-                    <Label htmlFor="sume" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_sume')}>NAKNADA ZA KORIŠĆENJE JAVNIH POVRŠINA 742143843:</Label>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="cb_sume"
+                        checked={!!checkedItems['iznos_sume']}
+                        onChange={() => toggleCheck('iznos_sume')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="sume" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_sume')}>NAKNADA ZA KORIŠĆENJE JAVNIH POVRŠINA 742143843:</Label>
+                    </div>
+                    <div className="flex items-center gap-2 ml-auto -mr-2">
+                      <input
+                        type="checkbox"
+                        id="reprogram_sume"
+                        checked={!!reprogramStavke['iznos_sume']}
+                        onChange={() => toggleReprogramStavka('iznos_sume')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="reprogram_sume" className="text-xs cursor-pointer uppercase">REPROGRAM</Label>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <Input
@@ -798,15 +888,27 @@ export default function UplatniceForm({ onNavigate }) {
                 </div>
 
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <input
-                      type="checkbox"
-                      id="cb_unapredjenje"
-                      checked={!!checkedItems['iznos_unapredjenje_zivotne_sredine']}
-                      onChange={() => toggleCheck('iznos_unapredjenje_zivotne_sredine')}
-                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
-                    />
-                    <Label htmlFor="unapredjenje" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_unapredjenje_zivotne_sredine')}>NAKNADA ZA KORIŠĆENJE JAVNIH POVRŠINA 714565843:</Label>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="cb_unapredjenje"
+                        checked={!!checkedItems['iznos_unapredjenje_zivotne_sredine']}
+                        onChange={() => toggleCheck('iznos_unapredjenje_zivotne_sredine')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="unapredjenje" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_unapredjenje_zivotne_sredine')}>NAKNADA ZA KORIŠĆENJE JAVNIH POVRŠINA 714565843:</Label>
+                    </div>
+                    <div className="flex items-center gap-2 ml-auto -mr-2">
+                      <input
+                        type="checkbox"
+                        id="reprogram_unapredjenje"
+                        checked={!!reprogramStavke['iznos_unapredjenje_zivotne_sredine']}
+                        onChange={() => toggleReprogramStavka('iznos_unapredjenje_zivotne_sredine')}
+                        className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
+                      />
+                      <Label htmlFor="reprogram_unapredjenje" className="text-xs cursor-pointer uppercase">REPROGRAM</Label>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <Input

@@ -4,7 +4,7 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
-  base: './',
+  base: process.env.NODE_ENV === 'production' ? '/uplatnice/' : './',
   server: {
     port: 5175,
     strictPort: true,
@@ -12,6 +12,11 @@ export default defineConfig({
     hmr: {
       overlay: false
     }
+  },
+  build: {
+    outDir: 'dist',
+    assetsDir: 'assets',
+    emptyOutDir: true
   },
   optimizeDeps: {
     include: ['react', 'react-dom', 'react/jsx-runtime'],

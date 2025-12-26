@@ -1,7 +1,8 @@
 import { logoBase64 } from './logoData.js'
 import { getAccountNumberForTax } from './pozivNaBroj.js'
+import { generateNBSQR } from './nbsQRGenerator.js'
 
-export function generateUplatnicaHTML(data) {
+export async function generateUplatnicaHTML(data) {
   // Determine items to list
   const items = data.items || [{ opis: data.stavka || 'UPLATA', iznos: data.iznos || 0 }]
 
@@ -64,14 +65,17 @@ export function generateUplatnicaHTML(data) {
     const check = parts[2]
     const ipsAccount = `${bank}${acc}${check}`
 
-    // 2. Format Amount: RSD + comma decimal
-    const ipsAmount = `RSD${iznosQR}`
+    // 2. Format Amount: Prema NBS IPS standardu, iznos treba da bude samo broj sa tačkom kao decimalnim separatorom
+    // total.toFixed(2) već vraća format sa tačkom (npr. "1234.56")
+    const ipsAmount = total.toFixed(2)
 
     const s_svrha = sanitize(stavka)
     const p_poziv = sanitize(poziv)
 
+    // NBS IPS format: K:PR|V:01|C:1|R:račun|N:naziv|I:iznos|SF:šifra|S:svrha|RO:model|P:poziv
     const ipsString = `K:PR|V:01|C:1|R:${ipsAccount}|N:${n_primalac}|I:${ipsAmount}|SF:${sifra}|S:${s_svrha}|RO:${model}|P:${p_poziv}`
-    qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(ipsString)}&size=300x300&ecc=M`
+    // Generiši QR kod lokalno (offline) ili preko NBS API/qrserver.com
+    qrUrl = await generateNBSQR(ipsString, 300)
   }
 
   const logoUrl = logoBase64
@@ -89,12 +93,13 @@ export function generateUplatnicaHTML(data) {
     const matrixCheck = matrixParts[2]
     const matrixIpsAccount = `${matrixBank}${matrixAcc}${matrixCheck}`
     
-    // Format Amount: RSD + comma decimal (za matrix mode)
-    const matrixIpsAmount = `RSD${iznosQR}`
+    // Format Amount: Prema NBS IPS standardu, iznos treba da bude samo broj sa tačkom kao decimalnim separatorom
+    const matrixIpsAmount = total.toFixed(2)
     
     // Generiši mali QR kod za matricni štampač (manji da ne troši mnogo tonera)
+    // NBS IPS format: K:PR|V:01|C:1|R:račun|N:naziv|I:iznos|SF:šifra|S:svrha|RO:model|P:poziv
     const matrixQRString = `K:PR|V:01|C:1|R:${matrixIpsAccount}|N:${n_primalac}|I:${matrixIpsAmount}|SF:${sifra}|S:${sanitize(stavka)}|RO:${model}|P:${sanitize(matrixPoziv)}`
-    const matrixQRUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(matrixQRString)}&size=120x120&ecc=M`
+    const matrixQRUrl = await generateNBSQR(matrixQRString, 120)
     
     return `
 <!DOCTYPE html>
@@ -134,6 +139,26 @@ export function generateUplatnicaHTML(data) {
       height: 25mm;
     }
     
+    /* Info sekcija uz središnju liniju */
+    .info-section-matrix {
+      position: absolute;
+      top: 50mm;
+      left: 50%;
+      margin-left: 5mm;
+      width: 50mm;
+      font-size: 9pt;
+      line-height: 1.1;
+      color: #333;
+      font-family: 'Courier New', Courier, monospace;
+    }
+    .info-section-matrix div {
+      margin-bottom: 0.5px;
+    }
+    .info-section-matrix strong {
+      font-size: 9pt;
+      font-weight: bold;
+    }
+    
     /* Absolute Positioning for Matrix - adjust based on real form measure */
     .platioc-box { top: 12mm; left: 10mm; width: 80mm; height: 30mm; }
     .svrha-box { top: 46mm; left: 10mm; width: 80mm; height: 18mm; }
@@ -170,6 +195,16 @@ export function generateUplatnicaHTML(data) {
     
     <!-- NBS QR kod za matricni štampač - mali -->
     <img src="${matrixQRUrl}" class="qr-code-matrix" alt="NBS IPS QR" />
+    
+    <!-- Info sekcija desno od QR koda -->
+    <div class="info-section-matrix">
+      <div>Grad Novi Pazar</div>
+      <div>Uprava za naplatu javnih prihoda</div>
+      <div>7. Juli bb, 36300 Novi Pazar</div>
+      <div>Radno vreme: 07:30 - 15:00</div>
+      <div>www.nplpa.rs</div>
+      <div>info@nplpa.rs</div>
+    </div>
   </div>
 </body>
 </html>
@@ -177,9 +212,10 @@ export function generateUplatnicaHTML(data) {
   }
 
   // Helper funkcija za generisanje QR koda za stavku
-  const generateQRForItem = (item) => {
+  const generateQRForItem = async (item) => {
     const itemPoziv = item.poziv_na_broj || poziv
-    const itemAmount = parseFloat(item.iznos || 0).toFixed(2).replace('.', ',')
+    // Format iznosa: samo broj sa tačkom (toFixed već vraća sa tačkom)
+    const itemAmount = parseFloat(item.iznos || 0).toFixed(2)
     const itemSvrha = sanitize(item.opis || stavka)
     const itemPozivSanitized = sanitize(itemPoziv)
     
@@ -191,14 +227,15 @@ export function generateUplatnicaHTML(data) {
     const itemCheck = itemParts[2]
     const itemIpsAccount = `${itemBank}${itemAcc}${itemCheck}`
     
-    const itemIpsString = `K:PR|V:01|C:1|R:${itemIpsAccount}|N:${n_primalac}|I:RSD${itemAmount}|SF:${sifra}|S:${itemSvrha}|RO:${model}|P:${itemPozivSanitized}`
-    return `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(itemIpsString)}&size=150x150&ecc=M`
+    // NBS IPS format: K:PR|V:01|C:1|R:račun|N:naziv|I:iznos|SF:šifra|S:svrha|RO:model|P:poziv
+    const itemIpsString = `K:PR|V:01|C:1|R:${itemIpsAccount}|N:${n_primalac}|I:${itemAmount}|SF:${sifra}|S:${itemSvrha}|RO:${model}|P:${itemPozivSanitized}`
+    return await generateNBSQR(itemIpsString, 150)
   }
 
-  // Generate table rows for A4
-  const rows = items.map(item => {
+  // Generate table rows for A4 - sada async
+  const rowsPromises = items.map(async item => {
     const itemPoziv = item.poziv_na_broj || poziv
-    const itemQR = generateQRForItem(item)
+    const itemQR = await generateQRForItem(item)
     // Koristi račun za ovu stavku
     const itemRacun = item.taxType ? getAccountNumberForTax(item.taxType) : racun
     return `
@@ -215,7 +252,9 @@ export function generateUplatnicaHTML(data) {
       <td class="amount">${parseFloat(item.iznos || 0).toFixed(2).replace('.', ',')}</td>
     </tr>
     `
-  }).join('')
+  })
+  
+  const rows = (await Promise.all(rowsPromises)).join('')
 
   return `
 <!DOCTYPE html>
@@ -451,10 +490,29 @@ export function generateUplatnicaHTML(data) {
     }
     .qr-code {
       position: absolute;
-      bottom: 20px; /* Moved up to avoid overlap */
+      bottom: 30px;
       right: 15px;
-      width: 40mm;
-      height: 40mm;
+      width: 32mm;
+      height: 32mm;
+      z-index: 1;
+    }
+    .info-section-zbirno {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      margin-left: 5mm;
+      width: 60mm;
+      font-size: 10pt;
+      line-height: 1.2;
+      color: #333;
+      font-family: 'Courier New', Courier, monospace;
+    }
+    .info-section-zbirno div {
+      margin-bottom: 1px;
+    }
+    .info-section-zbirno strong {
+      font-size: 10pt;
+      font-weight: bold;
     }
     .signature-line {
       margin-top: 25px;
@@ -575,11 +633,11 @@ export function generateUplatnicaHTML(data) {
 
         <!-- RIGHT SIDE -->
         <div class="right-part">
-          <div style="text-align: right; height: 25px;">
+          <div style="text-align: right; height: 28px; margin-bottom: 8px; border-bottom: 2px solid #000; padding-bottom: 4px; position: relative; z-index: 2;">
              <span class="header-title-nalog">NALOG ZA UPLATU</span>
           </div>
           
-          <div class="flex-row">
+          <div class="flex-row" style="margin-top: 10px;">
             <div class="col" style="width: 20%">
               <div class="section-label">šifra plaćanja</div>
               <div class="input-box" style="text-align:center; justify-content:center;">${sifra}</div>
@@ -594,10 +652,10 @@ export function generateUplatnicaHTML(data) {
             </div>
           </div>
 
-          <div class="section-label">račun primaoca</div>
+          <div class="section-label" style="margin-top: 8px;">račun primaoca</div>
           <div class="input-box">${racunNalog}</div>
 
-          <div class="section-label">model i poziv na broj (odobrenje)</div>
+          <div class="section-label" style="margin-top: 8px;">model i poziv na broj (odobrenje)</div>
           <div class="flex-row">
             <div class="input-box" style="width: 15%; justify-content:center;">${model}</div>
             <div class="input-box" style="flex: 1; margin-left:5px;">${pozivNalog}</div>
@@ -605,8 +663,20 @@ export function generateUplatnicaHTML(data) {
           
           <!-- QR CODE - prikazuje se samo za pojedinačne uplatnice -->
           ${qrUrl ? `<img src="${qrUrl}" class="qr-code" alt="NBS IPS QR" />` : ''}
-          ${qrUrl ? `<div style="position:absolute; bottom:5px; right:42mm; font-size:6pt;">Obrazac br. 1</div>` : ''}
-          ${qrUrl ? `<div style="position:absolute; bottom:5px; right: 10px; font-size:6pt; text-align:center; width:40mm;">NBS IPS QR</div>` : ''}
+          ${qrUrl ? `<div style="position:absolute; bottom:10px; right:34mm; font-size:6pt;">Obrazac br. 1</div>` : ''}
+          ${qrUrl ? `<div style="position:absolute; bottom:10px; right: 10px; font-size:6pt; text-align:center; width:32mm;">NBS IPS QR</div>` : ''}
+          
+          <!-- INFO SEKCIJA - prikazuje se samo za zbirne uplatnice (kada nema QR koda) -->
+          ${!qrUrl && isZbirnaUplatnica ? `
+          <div class="info-section-zbirno">
+            <div>Grad Novi Pazar</div>
+            <div>Uprava za naplatu javnih prihoda</div>
+            <div>7. Juli bb, 36300 Novi Pazar</div>
+            <div>Radno vreme: 07:30 - 15:00</div>
+            <div>www.nplpa.rs</div>
+            <div>info@nplpa.rs</div>
+          </div>
+          ` : ''}
 
         </div>
       </div>

@@ -4,6 +4,7 @@ import { Search, Printer, Receipt, X, History as HistoryIcon, FileText, Save, Pl
 import { useApp } from '../context/AppContext.jsx'
 import { databaseService } from '../services/databaseService.js'
 import { generatePotvrdaHTML } from '../utils/printTemplates.js'
+import { printHTML, downloadHTMLAsPDF } from '../utils/printUtils.js'
 import { Button } from './ui/button.jsx'
 import { Input } from './ui/input.jsx'
 import { Label } from './ui/label.jsx'
@@ -121,22 +122,12 @@ export default function PotvrdeForm({ onNavigate }) {
 
       const html = generatePotvrdaHTML(printData)
 
-      if (isElectron && window.electronAPI) {
-        await window.electronAPI.printSilent({
-          html,
-          printerName,
-          silent: true
-        })
-      } else {
-        const printWindow = window.open('', '_blank')
-        printWindow.document.write(html)
-        printWindow.document.close()
-        printWindow.focus()
-        setTimeout(() => {
-          printWindow.print()
-          printWindow.close()
-        }, 250)
-      }
+      // Use print utility which handles both Electron and web
+      await printHTML(html, {
+        printerName,
+        silent: true,
+        showPrintDialog: true
+      })
     } catch (error) {
       console.error('Print failed:', error)
       alert('Greška pri štampanju: ' + error.message)
