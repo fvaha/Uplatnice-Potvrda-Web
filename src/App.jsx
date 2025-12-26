@@ -108,10 +108,10 @@ function App() {
   } catch (error) {
     console.error('Error in App component:', error)
     return (
-      <div style={{ padding: '20px', color: 'red', backgroundColor: 'white' }}>
-        <h1>Error in App component</h1>
-        <p>{error.message}</p>
-        <pre>{error.stack}</pre>
+      <div className="p-5 bg-background text-foreground">
+        <h1 className="text-destructive text-xl font-bold mb-2">Error in App component</h1>
+        <p className="text-foreground mb-2">{error.message}</p>
+        <pre className="text-muted-foreground text-xs overflow-auto">{error.stack}</pre>
       </div>
     )
   }

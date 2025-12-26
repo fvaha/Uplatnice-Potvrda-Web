@@ -10,13 +10,51 @@ export const uplatniceDB = {
   },
 
   async search(query) {
-    const searchTerm = query.toLowerCase()
+    if (!query || !query.trim()) {
+      return []
+    }
+
+    // Normalize text function - converts to lowercase and normalizes Serbian characters
+    const normalizeText = (text) => {
+      if (!text) return ''
+      return text
+        .toLowerCase()
+        .replace(/č/g, 'c')
+        .replace(/ć/g, 'c')
+        .replace(/š/g, 's')
+        .replace(/ž/g, 'z')
+        .replace(/đ/g, 'd')
+    }
+
+    const normalizedQuery = normalizeText(query.trim())
+    const words = normalizedQuery.split(/\s+/).filter(w => w.length > 0)
+    
     return await db.uplatnice
-      .filter(item => 
-        item.jmbg?.toLowerCase().includes(searchTerm) ||
-        item.ime_i_prezime?.toLowerCase().includes(searchTerm) ||
-        item.adresa?.toLowerCase().includes(searchTerm)
-      )
+      .filter(item => {
+        const jmbg = normalizeText(item.jmbg)
+        const imePrezime = normalizeText(item.ime_i_prezime)
+        const adresa = normalizeText(item.adresa)
+        
+        // Check full match first
+        if (jmbg.includes(normalizedQuery) || 
+            imePrezime.includes(normalizedQuery) || 
+            adresa.includes(normalizedQuery)) {
+          return true
+        }
+        
+        // Check individual words for flexible name matching
+        if (words.length > 0) {
+          const nameWords = imePrezime.split(/\s+/)
+          const allWordsMatch = words.every(word => 
+            nameWords.some(nameWord => nameWord.includes(word))
+          )
+          if (allWordsMatch) {
+            return true
+          }
+        }
+        
+        return false
+      })
       .limit(100)
       .toArray()
   },

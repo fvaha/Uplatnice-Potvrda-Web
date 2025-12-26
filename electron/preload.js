@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   migrateToDb: (options) => ipcRenderer.invoke('migrate-excel-to-db', options),
   dbQuery: (options) => ipcRenderer.invoke('db-query', options),
   getDbStats: () => ipcRenderer.invoke('get-db-stats'),
+  getDbDebugInfo: () => ipcRenderer.invoke('get-db-debug-info'),
+  loadDatabaseFile: (options) => ipcRenderer.invoke('load-database-file', options),
+  selectDatabaseFile: () => ipcRenderer.invoke('select-database-file'),
   setNativeTheme: (theme) => ipcRenderer.send('set-native-theme', theme),
   platform: process.platform,
   onNavigate: (callback) => {

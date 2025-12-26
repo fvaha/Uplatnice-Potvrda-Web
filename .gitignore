@@ -78,3 +78,6 @@ builder-effective-config.yaml
 # Local documentation and helpers
 DOC/
 HELPERS/
+
+# Unused files
+UNUSED/

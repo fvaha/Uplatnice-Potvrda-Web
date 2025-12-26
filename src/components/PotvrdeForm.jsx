@@ -38,8 +38,9 @@ export default function PotvrdeForm({ onNavigate }) {
     oporeziva_povrsina: '',
     sifra_akta: '',
     broj_prijave: '',
-    svrha: 'DEČIJEG DODATKA',
-    svrha2: 'PREBIVALIŠTA',
+    svrha_izbor: 'DEČIJEG DODATKA', // Izbor iz padajućeg menija
+    svrha_custom: '', // Custom unos ako je izabrano 'CUSTOM'
+    zahteva_ime_prezime: '', // Ime i prezime osobe koja traži potvrdu
     status_lica: ''
   })
 
@@ -70,8 +71,9 @@ export default function PotvrdeForm({ onNavigate }) {
         sifra_akta: selectedPotvrda.sifra_akta || '',
         broj_prijave: selectedPotvrda.broj_prijave || '',
         status_lica: selectedPotvrda.status_lica || '',
-        svrha: 'DEČIJEG DODATKA',
-        svrha2: 'PREBIVALIŠTA'
+        svrha_izbor: selectedPotvrda.svrha_izbor || 'DEČIJEG DODATKA',
+        svrha_custom: selectedPotvrda.svrha_custom || '',
+        zahteva_ime_prezime: selectedPotvrda.zahteva_ime_prezime || ''
       })
     }
   }, [selectedPotvrda])
@@ -180,8 +182,9 @@ export default function PotvrdeForm({ onNavigate }) {
       oporeziva_povrsina: '',
       sifra_akta: '',
       broj_prijave: '',
-      svrha: 'DEČIJEG DODATKA',
-      svrha2: 'PREBIVALIŠTA',
+      svrha_izbor: 'DEČIJEG DODATKA',
+      svrha_custom: '',
+      zahteva_ime_prezime: '',
       status_lica: ''
     })
   }
@@ -218,7 +221,19 @@ export default function PotvrdeForm({ onNavigate }) {
                   {showHistory && searchHistory.length > 0 && (
                     <div className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md py-1 max-h-[200px] overflow-y-auto z-50">
                       {searchHistory
-                        .filter(term => term.toLowerCase().includes(searchQuery.toLowerCase()))
+                        .filter(term => {
+                          const normalizeText = (text) => {
+                            if (!text) return ''
+                            return text
+                              .toLowerCase()
+                              .replace(/č/g, 'c')
+                              .replace(/ć/g, 'c')
+                              .replace(/š/g, 's')
+                              .replace(/ž/g, 'z')
+                              .replace(/đ/g, 'd')
+                          }
+                          return normalizeText(term).includes(normalizeText(searchQuery))
+                        })
                         .map((term, index) => (
                           <div
                             key={index}
@@ -304,8 +319,9 @@ export default function PotvrdeForm({ onNavigate }) {
                           oporeziva_povrsina: '',
                           sifra_akta: '',
                           broj_prijave: '',
-                          svrha: 'DEČIJEG DODATKA',
-                          svrha2: 'PREBIVALIŠTA'
+                          svrha_izbor: 'DEČIJEG DODATKA',
+                          svrha_custom: '',
+                          zahteva_ime_prezime: ''
                         })
                       }}
                     >
@@ -343,8 +359,8 @@ export default function PotvrdeForm({ onNavigate }) {
                       <PlusCircle size={12} className="mr-1" /> Novi
                     </Button>
                     <div className="flex items-center gap-2">
-                      {saveStatus === 'success' && <span className="text-green-600 text-xs font-semibold animate-in fade-in zoom-in">Sačuvano!</span>}
-                      {saveStatus === 'error' && <span className="text-red-600 text-xs font-semibold animate-in fade-in zoom-in">Greška!</span>}
+                      {saveStatus === 'success' && <span className="text-foreground text-xs font-semibold animate-in fade-in zoom-in">Sačuvano!</span>}
+                      {saveStatus === 'error' && <span className="text-destructive text-xs font-semibold animate-in fade-in zoom-in">Greška!</span>}
                       <Button variant="default" size="sm" className="h-7 text-xs" onClick={handleSave}>
                         <Save size={12} className="mr-1" /> Sačuvaj
                       </Button>
@@ -352,8 +368,8 @@ export default function PotvrdeForm({ onNavigate }) {
                   </div>
                 </div>
                 {formData.status_lica && formData.status_lica.toUpperCase().includes('UMRL') && (
-                  <div className="flex items-center gap-2 px-3 py-1 bg-red-500/10 border border-red-500/20 rounded-md">
-                    <span className="text-red-600 dark:text-red-400 text-sm font-semibold">⚠ UMRLA OSOBA</span>
+                  <div className="flex items-center gap-2 px-3 py-1 bg-destructive/10 border border-destructive/20 rounded-md">
+                    <span className="text-destructive text-sm font-semibold">⚠ UMRLA OSOBA</span>
                   </div>
                 )}
               </div>
@@ -473,24 +489,39 @@ export default function PotvrdeForm({ onNavigate }) {
                   />
                 </div>
                 <div className="space-y-1 col-span-2">
-                  <Label htmlFor="svrha" className="text-xs">Svrha 1:</Label>
-                  <Input
-                    id="svrha"
-                    type="text"
-                    value={formData.svrha}
-                    onChange={(e) => setFormData(prev => ({ ...prev, svrha: e.target.value }))}
-                    placeholder="DEČIJEG DODATKA"
-                    className="h-8 text-sm"
-                  />
+                  <Label htmlFor="svrha_izbor" className="text-xs">Svrha:</Label>
+                  <select
+                    id="svrha_izbor"
+                    value={formData.svrha_izbor}
+                    onChange={(e) => setFormData(prev => ({ ...prev, svrha_izbor: e.target.value, svrha_custom: e.target.value === 'CUSTOM' ? prev.svrha_custom : '' }))}
+                    className="w-full h-8 rounded-md border border-input bg-background px-2 text-sm"
+                  >
+                    <option value="DEČIJEG DODATKA">Decijeg dodatka</option>
+                    <option value="PREBIVALIŠTA">Prebivalista</option>
+                    <option value="CUSTOM">Ukucaj svrhu</option>
+                  </select>
                 </div>
+                {formData.svrha_izbor === 'CUSTOM' && (
+                  <div className="space-y-1 col-span-2">
+                    <Label htmlFor="svrha_custom" className="text-xs">Unesi novu svrhu:</Label>
+                    <Input
+                      id="svrha_custom"
+                      type="text"
+                      value={formData.svrha_custom}
+                      onChange={(e) => setFormData(prev => ({ ...prev, svrha_custom: e.target.value }))}
+                      placeholder="Unesi novu svrhu potvrde"
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                )}
                 <div className="space-y-1 col-span-2">
-                  <Label htmlFor="svrha2" className="text-xs">Svrha 2:</Label>
+                  <Label htmlFor="zahteva_ime_prezime" className="text-xs">Ime i prezime osobe koja traži potvrdu:</Label>
                   <Input
-                    id="svrha2"
+                    id="zahteva_ime_prezime"
                     type="text"
-                    value={formData.svrha2}
-                    onChange={(e) => setFormData(prev => ({ ...prev, svrha2: e.target.value }))}
-                    placeholder="PREBIVALIŠTA"
+                    value={formData.zahteva_ime_prezime}
+                    onChange={(e) => setFormData(prev => ({ ...prev, zahteva_ime_prezime: e.target.value }))}
+                    placeholder="Ime i prezime"
                     className="h-8 text-sm"
                   />
                 </div>

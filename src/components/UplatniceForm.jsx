@@ -4,6 +4,7 @@ import { Search, Printer, FileText, X, History as HistoryIcon, Save, PlusCircle 
 import { useApp } from '../context/AppContext.jsx'
 import { databaseService } from '../services/databaseService.js'
 import { generateUplatnicaHTML } from '../utils/printTemplates.js'
+import { generatePozivNaBroj, generateAdminTaksaPozivNaBroj, getTaxLabel } from '../utils/pozivNaBroj.js'
 import { Button } from './ui/button.jsx'
 import { Input } from './ui/input.jsx'
 import { Label } from './ui/label.jsx'
@@ -75,17 +76,37 @@ export default function UplatniceForm({ onNavigate }) {
   // Učitaj podatke iz baze kada se selektuje osoba
   useEffect(() => {
     if (selectedPerson) {
+      const jmbg = selectedPerson.jmbg || ''
+      // Generiši poziv na broj za porez (najčešći) kao default
+      const defaultPoziv = jmbg ? generatePozivNaBroj('iznos_poreza', jmbg, false) : ''
       setFormData(prev => ({
         ...prev,
-        jmbg: selectedPerson.jmbg || '',
+        jmbg: jmbg,
         ime_i_prezime: selectedPerson.ime_i_prezime || '',
         adresa: selectedPerson.adresa || '',
-        poziv_na_broj: '79075',
+        poziv_na_broj: defaultPoziv || '',
         reprogram: false,
         stavke: {}
       }))
     }
   }, [selectedPerson])
+
+  // Auto-generiši poziv na broj kada se promeni JMBG ili reprogram
+  useEffect(() => {
+    if (formData.jmbg && formData.jmbg.replace(/\D/g, '').length === 13) {
+      // Generiši za porez kao default (najčešći)
+      const cleanJMBG = formData.jmbg.replace(/\D/g, '')
+      const newPoziv = generatePozivNaBroj('iznos_poreza', cleanJMBG, formData.reprogram)
+      if (newPoziv && newPoziv !== formData.poziv_na_broj) {
+        setFormData(prev => ({ ...prev, poziv_na_broj: newPoziv }))
+      }
+    } else if (!formData.jmbg || formData.jmbg.replace(/\D/g, '').length !== 13) {
+      // Ako JMBG nije validan, obriši poziv na broj
+      if (formData.poziv_na_broj) {
+        setFormData(prev => ({ ...prev, poziv_na_broj: '' }))
+      }
+    }
+  }, [formData.jmbg, formData.reprogram])
 
   const handleSearch = async (e, directTerm = null) => {
     e.preventDefault()
@@ -142,6 +163,19 @@ export default function UplatniceForm({ onNavigate }) {
     'iznos_prihoda': 'PRIHODA OD UVEĆANJA CELOKUPNOG PORESKOG DUGA'
   }
 
+  // Helper funkcija za generisanje poziva na broj za određeni tip poreza
+  const getPozivNaBrojForTax = (taxType) => {
+    if (!formData.jmbg || formData.jmbg.length !== 13) {
+      return ''
+    }
+    
+    if (taxType === 'taksa_300' || taxType === 'taksa_400') {
+      return generateAdminTaksaPozivNaBroj(formData.jmbg, formData.reprogram)
+    }
+    
+    return generatePozivNaBroj(taxType, formData.jmbg, formData.reprogram)
+  }
+
   const handlePrintChecked = async () => {
     if (!selectedPerson) {
       alert('Molimo izaberite osobu iz baze!')
@@ -156,9 +190,14 @@ export default function UplatniceForm({ onNavigate }) {
         if (key === 'taksa_300') amount = taxPrices?.taksa_300 || 300
         if (key === 'taksa_400') amount = taxPrices?.taksa_400 || 400
 
+        // Generiši poziv na broj za svaku stavku
+        const pozivNaBroj = getPozivNaBrojForTax(key)
+
         return {
           opis: ITEMS_MAP[key] || key.toUpperCase(),
-          iznos: amount
+          iznos: amount,
+          poziv_na_broj: pozivNaBroj,
+          taxType: key // Sačuvaj tip poreza za QR kod generisanje
         }
       })
       .filter(item => item.iznos)
@@ -176,22 +215,11 @@ export default function UplatniceForm({ onNavigate }) {
 
       const printData = {
         ...selectedPerson,
-        poziv_na_broj: formData.poziv_na_broj,
+        poziv_na_broj: formData.poziv_na_broj, // Default poziv (za backward compatibility)
         reprogram: formData.reprogram ? 'DA' : 'NE',
         items: itemsToPrint,
-        hideAmountOnSlip: false // User wants checked total on standard A4 print? Actually previous logic was hideAmountOnSlip: true.
-        // User said: "a stavke koje cekiram da uneses u ovaj deo jednu po jednu i napravi posle ukupno od svih stavki koje sam cekirao"
-        // And regarding A4 print preview: "nema placeholder 0.00" -> handled by my generic empty logic?
-        // Let's keep existing logic but update printer name.
+        hideAmountOnSlip: false
       }
-
-      // Update: If printing collective A4, we usually want the total amount on the slip too unless User specifically asked for blank.
-      // In previous step I set hideAmountOnSlip: true.
-      // But matrix print must have amount.
-      // A4 print: "napravi posle ukupno od svih stavki". This implies the slip SHOULD have the total.
-      // So I will remove hideAmountOnSlip: true, or set it to false.
-      // Let's set it to false, so the slip shows the Grand Total.
-      printData.hideAmountOnSlip = false
 
       const html = generateUplatnicaHTML(printData)
 
@@ -242,6 +270,9 @@ export default function UplatniceForm({ onNavigate }) {
       if (label.includes('400')) iznos = taxPrices?.taksa_400 || '400'
     }
 
+    // Generiši poziv na broj za ovu stavku
+    const pozivNaBroj = getPozivNaBrojForTax(field)
+
     setPrinting(true)
     try {
       const isElectron = typeof window !== 'undefined' && window.electronAPI
@@ -250,11 +281,12 @@ export default function UplatniceForm({ onNavigate }) {
 
       const printData = {
         ...selectedPerson,
-        poziv_na_broj: formData.poziv_na_broj,
+        poziv_na_broj: pozivNaBroj || formData.poziv_na_broj,
         reprogram: formData.reprogram ? 'DA' : 'NE',
         stavka: label,
         iznos: iznos,
-        matrix: true // Force matrix template (Slip Only, No QR, Fixed Size)
+        matrix: true, // Force matrix template (Slip Only, No QR, Fixed Size)
+        taxType: field // Sačuvaj tip poreza za QR kod generisanje
       }
 
       const html = generateUplatnicaHTML(printData)
@@ -351,7 +383,19 @@ export default function UplatniceForm({ onNavigate }) {
                   {showHistory && searchHistory.length > 0 && (
                     <div className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md py-1 max-h-[200px] overflow-y-auto z-50">
                       {searchHistory
-                        .filter(term => term.toLowerCase().includes(searchQuery.toLowerCase()))
+                        .filter(term => {
+                          const normalizeText = (text) => {
+                            if (!text) return ''
+                            return text
+                              .toLowerCase()
+                              .replace(/č/g, 'c')
+                              .replace(/ć/g, 'c')
+                              .replace(/š/g, 's')
+                              .replace(/ž/g, 'z')
+                              .replace(/đ/g, 'd')
+                          }
+                          return normalizeText(term).includes(normalizeText(searchQuery))
+                        })
                         .map((term, index) => (
                           <div
                             key={index}
@@ -465,8 +509,8 @@ export default function UplatniceForm({ onNavigate }) {
                     <PlusCircle size={12} className="mr-1" /> Novi
                   </Button>
                   <div className="flex items-center gap-2">
-                    {saveStatus === 'success' && <span className="text-green-600 text-xs font-semibold animate-in fade-in zoom-in">Sačuvano!</span>}
-                    {saveStatus === 'error' && <span className="text-red-600 text-xs font-semibold animate-in fade-in zoom-in">Greška!</span>}
+                    {saveStatus === 'success' && <span className="text-foreground text-xs font-semibold animate-in fade-in zoom-in">Sačuvano!</span>}
+                    {saveStatus === 'error' && <span className="text-destructive text-xs font-semibold animate-in fade-in zoom-in">Greška!</span>}
                     <Button variant="default" size="sm" className="h-7 text-xs" onClick={handleSave}>
                       <Save size={12} className="mr-1" /> Sačuvaj
                     </Button>
@@ -547,6 +591,8 @@ export default function UplatniceForm({ onNavigate }) {
                     value={formData.poziv_na_broj}
                     onChange={(e) => setFormData(prev => ({ ...prev, poziv_na_broj: e.target.value }))}
                     className="h-8 font-mono"
+                    placeholder="Auto-generiše se za POREZ"
+                    title="Automatski se generiše na osnovu JMBG-a i tipa poreza. Za svaku stavku se generiše poseban poziv na broj."
                   />
                 </div>
               </div>
@@ -572,7 +618,7 @@ export default function UplatniceForm({ onNavigate }) {
                       id="cb_porez"
                       checked={!!checkedItems['iznos_poreza']}
                       onChange={() => toggleCheck('iznos_poreza')}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
                     />
                     <Label htmlFor="porez" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_poreza')}>IZNOS POREZA:</Label>
                   </div>
@@ -603,7 +649,7 @@ export default function UplatniceForm({ onNavigate }) {
                       id="cb_eko"
                       checked={!!checkedItems['iznos_eko']}
                       onChange={() => toggleCheck('iznos_eko')}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
                     />
                     <Label htmlFor="eko" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_eko')}>IZNOS EKO:</Label>
                   </div>
@@ -634,7 +680,7 @@ export default function UplatniceForm({ onNavigate }) {
                       id="cb_zemljiste"
                       checked={!!checkedItems['iznos_zemljiste']}
                       onChange={() => toggleCheck('iznos_zemljiste')}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
                     />
                     <Label htmlFor="zemljiste" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_zemljiste')}>IZNOS G. ZEMLJIŠTA:</Label>
                   </div>
@@ -665,7 +711,7 @@ export default function UplatniceForm({ onNavigate }) {
                       id="cb_kom_takse"
                       checked={!!checkedItems['iznos_kom_takse']}
                       onChange={() => toggleCheck('iznos_kom_takse')}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
                     />
                     <Label htmlFor="kom_takse" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_kom_takse')}>IZNOS KOM. TAKSE:</Label>
                   </div>
@@ -696,7 +742,7 @@ export default function UplatniceForm({ onNavigate }) {
                       id="cb_samodoprinos"
                       checked={!!checkedItems['iznos_samodoprinos']}
                       onChange={() => toggleCheck('iznos_samodoprinos')}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
                     />
                     <Label htmlFor="samodoprinos" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_samodoprinos')}>IZNOS SAMODOPRINOS:</Label>
                   </div>
@@ -727,7 +773,7 @@ export default function UplatniceForm({ onNavigate }) {
                       id="cb_sume"
                       checked={!!checkedItems['iznos_sume']}
                       onChange={() => toggleCheck('iznos_sume')}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
                     />
                     <Label htmlFor="sume" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_sume')}>NAKNADA ZA KORIŠĆENJE JAVNIH POVRŠINA 742143843:</Label>
                   </div>
@@ -758,7 +804,7 @@ export default function UplatniceForm({ onNavigate }) {
                       id="cb_unapredjenje"
                       checked={!!checkedItems['iznos_unapredjenje_zivotne_sredine']}
                       onChange={() => toggleCheck('iznos_unapredjenje_zivotne_sredine')}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
                     />
                     <Label htmlFor="unapredjenje" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_unapredjenje_zivotne_sredine')}>NAKNADA ZA KORIŠĆENJE JAVNIH POVRŠINA 714565843:</Label>
                   </div>
@@ -789,7 +835,7 @@ export default function UplatniceForm({ onNavigate }) {
                       id="cb_prihoda"
                       checked={!!checkedItems['iznos_prihoda']}
                       onChange={() => toggleCheck('iznos_prihoda')}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
                     />
                     <Label htmlFor="prihoda" className="text-xs uppercase cursor-pointer" onClick={() => toggleCheck('iznos_prihoda')}>PRIHODA OD UVEĆANJA CELOKUPNOG PORESKOG DUGA:</Label>
                   </div>
@@ -823,14 +869,14 @@ export default function UplatniceForm({ onNavigate }) {
             </CardHeader>
             <CardContent className="pt-0">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-lg border border-transparent hover:border-gray-200">
+                <div className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-lg border border-transparent hover:border-border">
                   <div className="flex items-center gap-3">
                     <input
                       type="checkbox"
                       id="cb_taksa300"
                       checked={!!checkedItems['taksa_300']}
                       onChange={() => toggleCheck('taksa_300')}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
                     />
                     <div className="flex flex-col">
                       <Label htmlFor="cb_taksa300" className="cursor-pointer font-medium">ADMINISTRATIVNA TAKSA</Label>
@@ -847,14 +893,14 @@ export default function UplatniceForm({ onNavigate }) {
                   </Button>
                 </div>
 
-                <div className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-lg border border-transparent hover:border-gray-200">
+                <div className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-lg border border-transparent hover:border-border">
                   <div className="flex items-center gap-3">
                     <input
                       type="checkbox"
                       id="cb_taksa400"
                       checked={!!checkedItems['taksa_400']}
                       onChange={() => toggleCheck('taksa_400')}
-                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-primary"
                     />
                     <div className="flex flex-col">
                       <Label htmlFor="cb_taksa400" className="cursor-pointer font-medium">ADMINISTRATIVNA TAKSA (DRUGA)</Label>
@@ -888,7 +934,13 @@ export default function UplatniceForm({ onNavigate }) {
                   let amount = formData.stavke[key]
                   if (key === 'taksa_300') amount = taxPrices?.taksa_300 || 300
                   if (key === 'taksa_400') amount = taxPrices?.taksa_400 || 400
-                  return { opis: ITEMS_MAP[key] || key.toUpperCase(), iznos: amount }
+                  const pozivNaBroj = getPozivNaBrojForTax(key)
+                  return { 
+                    opis: ITEMS_MAP[key] || key.toUpperCase(), 
+                    iznos: amount,
+                    poziv_na_broj: pozivNaBroj,
+                    taxType: key
+                  }
                 })
                 .filter(i => i.iznos)
               : undefined,

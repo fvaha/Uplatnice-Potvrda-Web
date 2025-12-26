@@ -19,13 +19,15 @@
     "start:dev": "pnpm dev",
     "start:electron": "pnpm electron:dev",
     "copy-db": "bash HELPERS/copy-db-to-resources.sh",
-    "dist": "electron-vite build && electron-builder",
-    "dist:win": "electron-vite build && electron-builder --win",
-    "dist:win:portable": "electron-vite build && electron-builder --win portable",
-    "dist:linux": "electron-vite build && electron-builder --linux",
-    "dist:linux:appimage": "electron-vite build && electron-builder --linux AppImage",
-    "dist:linux:deb": "electron-vite build && electron-builder --linux deb",
-    "dist:linux:pacman": "electron-vite build && electron-builder --linux pacman"
+    "dist": "pnpm copy-db && electron-vite build && electron-builder",
+    "dist:win": "pnpm copy-db && pnpm clean:native && electron-vite build && electron-builder --win",
+    "dist:win:portable": "pnpm copy-db && pnpm clean:native && electron-vite build && electron-builder --win portable",
+    "dist:win:nsis": "pnpm copy-db && pnpm clean:native && electron-vite build && electron-builder --win nsis",
+    "dist:linux": "pnpm copy-db && pnpm clean:native && electron-vite build && electron-builder --linux",
+    "dist:linux:appimage": "pnpm copy-db && pnpm clean:native && electron-vite build && electron-builder --linux AppImage",
+    "dist:linux:deb": "pnpm copy-db && pnpm clean:native && electron-vite build && electron-builder --linux deb",
+    "dist:linux:pacman": "pnpm copy-db && pnpm clean:native && electron-vite build && electron-builder --linux pacman",
+    "clean:native": "rm -rf node_modules/better-sqlite3/build node_modules/better-sqlite3/lib/binding"
   },
   "dependencies": {
     "better-sqlite3": "^12.5.0",
@@ -45,12 +47,14 @@
     "autoprefixer": "^10.4.20",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "docx": "^9.5.1",
     "electron": "^39.2.6",
     "electron-builder": "^25.1.8",
     "electron-rebuild": "^3.2.9",
     "electron-vite": "^5.0.0",
     "lucide-react": "^0.556.0",
     "postcss": "^8.4.40",
+    "puppeteer": "^24.34.0",
     "sqlite3": "^5.1.7",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^3.4.17",
@@ -73,11 +77,33 @@
       "node_modules/file-uri-to-path/**/*",
       "node_modules/xlsx/**/*"
     ],
+    "asarUnpack": [
+      "**/better-sqlite3/**/*",
+      "**/bindings/**/*",
+      "**/file-uri-to-path/**/*"
+    ],
     "extraResources": [
-      "resources/**/*"
+      {
+        "from": "resources/uplatnice.db",
+        "to": "uplatnice.db"
+      },
+      {
+        "from": "resources/potvrde.db",
+        "to": "potvrde.db"
+      },
+      {
+        "from": "resources/logo.png",
+        "to": "logo.png"
+      }
     ],
     "win": {
       "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
         {
           "target": "portable",
           "arch": [
@@ -88,7 +114,21 @@
       "icon": "resources/logo.png",
       "signtoolOptions": {
         "sign": false
-      }
+      },
+      "extraResources": [
+        {
+          "from": "resources/uplatnice.db",
+          "to": "uplatnice.db"
+        },
+        {
+          "from": "resources/potvrde.db",
+          "to": "potvrde.db"
+        },
+        {
+          "from": "resources/logo.png",
+          "to": "logo.png"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -118,6 +158,20 @@
       ],
       "category": "Office",
       "icon": "resources/logo.png",
+      "extraResources": [
+        {
+          "from": "resources/uplatnice.db",
+          "to": "uplatnice.db"
+        },
+        {
+          "from": "resources/potvrde.db",
+          "to": "potvrde.db"
+        },
+        {
+          "from": "resources/logo.png",
+          "to": "logo.png"
+        }
+      ],
       "desktop": {
         "Name": "Uplatnice i Potvrde",
         "Comment": "Aplikacija za štampanje uplatnica i potvrda",

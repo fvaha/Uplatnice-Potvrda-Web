@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { X, Printer } from 'lucide-react'
 import { generateUplatnicaHTML, generatePotvrdaHTML } from '../utils/printTemplates.js'
+import { Button } from './ui/button'
 
 export default function PrintPreview({ data, type, onClose, onPrint }) {
   return (
@@ -19,18 +20,18 @@ export default function PrintPreview({ data, type, onClose, onPrint }) {
         className="glass-strong rounded-2xl p-4 max-w-[95vw] w-full h-[95vh] flex flex-col"
       >
         <div className="flex justify-between items-center mb-4 flex-shrink-0">
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+          <h2 className="text-2xl font-bold text-foreground">
             Print Preview - {type === 'uplatnice' ? 'Uplatnica' : 'Potvrda'}
           </h2>
           <button
             onClick={onClose}
-            className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+            className="p-2 rounded-lg hover:bg-accent transition-colors"
           >
-            <X size={24} className="text-gray-600 dark:text-gray-400" />
+            <X size={24} className="text-muted-foreground" />
           </button>
         </div>
 
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-0 shadow-lg flex-1 overflow-hidden relative">
+        <div className="bg-card rounded-lg p-0 shadow-lg flex-1 overflow-hidden relative">
           <iframe
             srcDoc={type === 'uplatnice' ? generateUplatnicaHTML(data) : generatePotvrdaHTML(data)}
             className="w-full h-full border-none"
@@ -39,19 +40,20 @@ export default function PrintPreview({ data, type, onClose, onPrint }) {
         </div>
 
         <div className="flex justify-end space-x-4 mt-6">
-          <button
+          <Button
+            variant="outline"
             onClick={onClose}
-            className="px-4 py-2 rounded-lg glass border border-white/20 hover:bg-white/10 text-gray-900 dark:text-white"
           >
             Otkaži
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="default"
             onClick={onPrint}
-            className="px-4 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 text-white font-medium flex items-center space-x-2"
+            className="flex items-center space-x-2"
           >
             <Printer size={18} />
             <span>Štampaj</span>
-          </button>
+          </Button>
         </div>
       </motion.div>
     </motion.div>

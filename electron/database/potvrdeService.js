@@ -33,14 +33,80 @@ class PotvrdeService {
   }
 
   search(query) {
-    const searchTerm = `%${query}%`
+    if (!query || !query.trim()) {
+      return []
+    }
+
+    // Normalize query - remove extra spaces and normalize Serbian characters
+    const normalizedQuery = query.trim()
+    const normalizeText = (text) => {
+      if (!text) return ''
+      return text
+        .toLowerCase()
+        .replace(/č/g, 'c')
+        .replace(/ć/g, 'c')
+        .replace(/š/g, 's')
+        .replace(/ž/g, 'z')
+        .replace(/đ/g, 'd')
+    }
+    
+    const normalizedSearchTerm = normalizeText(normalizedQuery)
+    const searchTerm = `%${normalizedSearchTerm}%`
+    
+    // Split query into words for flexible name matching
+    const words = normalizedSearchTerm.split(/\s+/).filter(w => w.length > 0)
+    
+    // Build flexible search conditions for obveznik (name) using NORMALIZE_TEXT
+    const nameConditions = words.length > 0
+      ? `(NORMALIZE_TEXT(obveznik) LIKE ? OR ${words.map(() => 'NORMALIZE_TEXT(obveznik) LIKE ?').join(' OR ')})`
+      : 'NORMALIZE_TEXT(obveznik) LIKE ?'
+    
+    // Build name params
+    const nameParams = [searchTerm] // Full name match
+    if (words.length > 0) {
+      nameParams.push(...words.map(w => `%${w}%`)) // Individual word matches
+    }
+    
+    // Build address conditions (both adresa_obveznika and adresa_objekta) using NORMALIZE_TEXT
+    const addressConditions = words.length > 0
+      ? `((NORMALIZE_TEXT(adresa_objekta) LIKE ? OR NORMALIZE_TEXT(adresa_obveznika) LIKE ?) OR ${words.map(() => '(NORMALIZE_TEXT(adresa_objekta) LIKE ? OR NORMALIZE_TEXT(adresa_obveznika) LIKE ?)').join(' OR ')})`
+      : '(NORMALIZE_TEXT(adresa_objekta) LIKE ? OR NORMALIZE_TEXT(adresa_obveznika) LIKE ?)'
+    
+    // Build address params
+    const addressParams = [searchTerm, searchTerm] // Full address match
+    if (words.length > 0) {
+      addressParams.push(...words.flatMap(w => [`%${w}%`, `%${w}%`])) // Individual word matches for both addresses
+    }
+    
+    // Combine all params
+    const sqlParams = [
+      ...nameParams, // Name conditions
+      searchTerm, // JMBG
+      ...addressParams, // Address conditions
+      searchTerm, // PIB
+      searchTerm, // Ordering - exact name match
+      searchTerm, // Ordering - JMBG match
+      searchTerm, // Ordering - PIB match
+    ]
+    
     const stmt = this.db.prepare(`
       SELECT * FROM potvrde 
-      WHERE jmbg LIKE ? OR obveznik LIKE ? OR adresa_objekta LIKE ? OR pib LIKE ?
-      ORDER BY obveznik
+      WHERE ${nameConditions}
+         OR NORMALIZE_TEXT(jmbg) LIKE ?
+         OR ${addressConditions}
+         OR NORMALIZE_TEXT(pib) LIKE ?
+      ORDER BY 
+        CASE 
+          WHEN NORMALIZE_TEXT(obveznik) LIKE ? THEN 1
+          WHEN NORMALIZE_TEXT(jmbg) LIKE ? THEN 2
+          WHEN NORMALIZE_TEXT(pib) LIKE ? THEN 3
+          ELSE 4
+        END,
+        obveznik
       LIMIT 100
     `)
-    return stmt.all(searchTerm, searchTerm, searchTerm, searchTerm)
+    
+    return stmt.all(...sqlParams)
   }
 
   insert(data) {

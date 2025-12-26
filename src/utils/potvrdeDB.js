@@ -21,14 +21,65 @@ export const potvrdeDB = {
   },
 
   async search(query) {
-    const searchTerm = query.toLowerCase()
+    if (!query || !query.trim()) {
+      return []
+    }
+
+    // Normalize text function - converts to lowercase and normalizes Serbian characters
+    const normalizeText = (text) => {
+      if (!text) return ''
+      return text
+        .toString()
+        .toLowerCase()
+        .replace(/č/g, 'c')
+        .replace(/ć/g, 'c')
+        .replace(/š/g, 's')
+        .replace(/ž/g, 'z')
+        .replace(/đ/g, 'd')
+    }
+
+    const normalizedQuery = normalizeText(query.trim())
+    const words = normalizedQuery.split(/\s+/).filter(w => w.length > 0)
+    
     return await db.potvrde
-      .filter(item => 
-        item.jmbg?.toString().toLowerCase().includes(searchTerm) ||
-        item.obveznik?.toLowerCase().includes(searchTerm) ||
-        item.adresa_objekta?.toLowerCase().includes(searchTerm) ||
-        item.pib?.toString().toLowerCase().includes(searchTerm)
-      )
+      .filter(item => {
+        const jmbg = normalizeText(item.jmbg)
+        const obveznik = normalizeText(item.obveznik)
+        const adresaObjekta = normalizeText(item.adresa_objekta)
+        const adresaObveznika = normalizeText(item.adresa_obveznika)
+        const pib = normalizeText(item.pib)
+        
+        // Check full match first
+        if (jmbg.includes(normalizedQuery) || 
+            obveznik.includes(normalizedQuery) || 
+            adresaObjekta.includes(normalizedQuery) ||
+            adresaObveznika.includes(normalizedQuery) ||
+            pib.includes(normalizedQuery)) {
+          return true
+        }
+        
+        // Check individual words for flexible name matching
+        if (words.length > 0) {
+          const nameWords = obveznik.split(/\s+/)
+          const allWordsMatch = words.every(word => 
+            nameWords.some(nameWord => nameWord.includes(word))
+          )
+          if (allWordsMatch) {
+            return true
+          }
+          
+          // Also check address words
+          const addressWords = (adresaObjekta + ' ' + adresaObveznika).split(/\s+/)
+          const addressMatch = words.some(word =>
+            addressWords.some(addrWord => addrWord.includes(word))
+          )
+          if (addressMatch) {
+            return true
+          }
+        }
+        
+        return false
+      })
       .limit(100)
       .toArray()
   },

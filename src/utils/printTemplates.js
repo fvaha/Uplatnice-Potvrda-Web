@@ -1,4 +1,5 @@
 import { logoBase64 } from './logoData.js'
+import { getAccountNumberForTax } from './pozivNaBroj.js'
 
 export function generateUplatnicaHTML(data) {
   // Determine items to list
@@ -7,48 +8,94 @@ export function generateUplatnicaHTML(data) {
   // Calculate total
   const total = items.reduce((sum, item) => sum + (parseFloat(item.iznos) || 0), 0)
   const totalFmt = total.toFixed(2).replace('.', ',')
+  
+  // Za zbirnu uplatnicu (više stavki), polja u nalogu za uplatu treba da budu prazna
+  const isZbirnaUplatnica = items.length > 1
+  
   // Bottom slip amount logic
   // If explicitly requested to hide amount (multi-item mode), leave empty
-  const iznosSlip = data.hideAmountOnSlip ? '' : `= ${totalFmt}`
+  // Za zbirnu uplatnicu, iznos u nalogu za uplatu treba da bude prazan
+  const iznosSlip = (data.hideAmountOnSlip || isZbirnaUplatnica) ? '' : `= ${totalFmt}`
 
   // QR Code Amount: ALWAYS use the total so the code is valid and useful
   const iznosQR = total.toFixed(2).replace('.', ',')
 
+  // Za zbirnu uplatnicu, svrha uplate u nalogu za uplatu treba da bude prazna
   const stavka = items.length === 1 ? items[0].opis : 'UPLATA PO ZADUŽENJU'
+  const stavkaNalog = isZbirnaUplatnica ? '' : stavka
+  
   const platioc = `${data.ime_i_prezime || ''}, ${data.adresa || ''}`.trim()
   const primalac = 'GRAD NOVI PAZAR\nGU ZA NAPLATU JAVNIH PRIHODA\n7. JULI BB, NOVI PAZAR'
-  const racun = '840-742251843-73'
+  
+  // Za pojedinačnu stavku, koristi račun za tu stavku, inače default
+  // Ako ima samo jedna stavka, koristi račun iz te stavke ako postoji taxType
+  const racun = items.length === 1 && items[0].taxType 
+    ? getAccountNumberForTax(items[0].taxType) 
+    : (data.taxType ? getAccountNumberForTax(data.taxType) : '840-742251843-73')
+  // Za zbirnu uplatnicu, račun primaoca treba da bude prazan (korisnik može da unese bilo koji)
+  const racunNalog = isZbirnaUplatnica ? '' : racun
+  
   const sifra = '153'
   const model = '97'
-  const poziv = data.poziv_na_broj || ''
+  // Ako ima samo jedna stavka, koristi poziv na broj iz te stavke ako postoji
+  const poziv = items.length === 1 && items[0].poziv_na_broj 
+    ? items[0].poziv_na_broj 
+    : (data.poziv_na_broj || '')
+  // Za zbirnu uplatnicu, poziv na broj u nalogu za uplatu treba da bude prazan
+  const pozivNalog = isZbirnaUplatnica ? '' : poziv
   const datum = new Date().toLocaleDateString('sr-RS')
   const rok = new Date(new Date().getTime() + 15 * 24 * 60 * 60 * 1000).toLocaleDateString('sr-RS') // 15 days from now
 
   // IPS QR String
-  // 1. Format Account: Must be 18 digits. 840-742251843-73 -> 840000074225184373
-  const parts = racun.split('-')
-  const bank = parts[0]
-  const acc = parts[1].padStart(13, '0') // Pad middle part to 13 digits
-  const check = parts[2]
-  const ipsAccount = `${bank}${acc}${check}`
+  // Za zbirnu uplatnicu, QR kod u "NALOG ZA UPLATU" sekciji ne treba da se prikazuje
+  // (korisnik može da unese bilo koji račun, pa se ne može generisati validan QR kod)
+  let qrUrl = ''
+  // Helper za sanitizaciju (koristi se i u drugim delovima)
+  const sanitize = (str) => (str || '').replace(/[\n\r|]/g, ' ').trim().substring(0, 70)
+  
+  // NBS: Name of payee - definisan na nivou funkcije da bude dostupan svuda
+  const n_primalac = "GRAD NOVI PAZAR"
+  
+  if (!isZbirnaUplatnica) {
+    // 1. Format Account: Must be 18 digits. 840-742251843-73 -> 840000074225184373
+    const parts = racun.split('-')
+    const bank = parts[0]
+    const acc = parts[1].padStart(13, '0') // Pad middle part to 13 digits
+    const check = parts[2]
+    const ipsAccount = `${bank}${acc}${check}`
 
-  // 2. Format Amount: RSD + comma decimal
-  const ipsAmount = `RSD${iznosQR}`
+    // 2. Format Amount: RSD + comma decimal
+    const ipsAmount = `RSD${iznosQR}`
 
-  // 3. Sanitize inputs (remove |, newline)
-  const sanitize = (str) => (str || '').replace(/[\n\r|]/g, ' ').trim().substring(0, 70) // Limit length generally
+    const s_svrha = sanitize(stavka)
+    const p_poziv = sanitize(poziv)
 
-  const n_primalac = "GRAD NOVI PAZAR" // NBS: Name of payee
-  const s_svrha = sanitize(stavka)
-  const p_poziv = sanitize(poziv)
-
-  const ipsString = `K:PR|V:01|C:1|R:${ipsAccount}|N:${n_primalac}|I:${ipsAmount}|SF:${sifra}|S:${s_svrha}|RO:${model}|P:${p_poziv}`
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(ipsString)}&size=300x300&ecc=M`
+    const ipsString = `K:PR|V:01|C:1|R:${ipsAccount}|N:${n_primalac}|I:${ipsAmount}|SF:${sifra}|S:${s_svrha}|RO:${model}|P:${p_poziv}`
+    qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(ipsString)}&size=300x300&ecc=M`
+  }
 
   const logoUrl = logoBase64
 
   // Matrix (Epson PLQ-20) Mode
   if (data.matrix) {
+    // Za matricni štampač, koristi poziv na broj iz data objekta (već generisan za tu stavku)
+    const matrixPoziv = data.poziv_na_broj || poziv
+    
+    // Koristi račun za ovu stavku
+    const matrixRacun = data.taxType ? getAccountNumberForTax(data.taxType) : racun
+    const matrixParts = matrixRacun.split('-')
+    const matrixBank = matrixParts[0]
+    const matrixAcc = matrixParts[1].padStart(13, '0')
+    const matrixCheck = matrixParts[2]
+    const matrixIpsAccount = `${matrixBank}${matrixAcc}${matrixCheck}`
+    
+    // Format Amount: RSD + comma decimal (za matrix mode)
+    const matrixIpsAmount = `RSD${iznosQR}`
+    
+    // Generiši mali QR kod za matricni štampač (manji da ne troši mnogo tonera)
+    const matrixQRString = `K:PR|V:01|C:1|R:${matrixIpsAccount}|N:${n_primalac}|I:${matrixIpsAmount}|SF:${sifra}|S:${sanitize(stavka)}|RO:${model}|P:${sanitize(matrixPoziv)}`
+    const matrixQRUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(matrixQRString)}&size=120x120&ecc=M`
+    
     return `
 <!DOCTYPE html>
 <html>
@@ -77,8 +124,15 @@ export function generateUplatnicaHTML(data) {
     .field {
       position: absolute;
     }
-    /* Hide QR code for matrix */
-    .qr-code { display: none; }
+    
+    /* QR kod za matricni štampač - mali da ne troši mnogo tonera */
+    .qr-code-matrix {
+      position: absolute;
+      top: 50mm;
+      right: 10mm;
+      width: 25mm;
+      height: 25mm;
+    }
     
     /* Absolute Positioning for Matrix - adjust based on real form measure */
     .platioc-box { top: 12mm; left: 10mm; width: 80mm; height: 30mm; }
@@ -110,25 +164,58 @@ export function generateUplatnicaHTML(data) {
     <div class="field valuta-box data-text">RSD</div>
     <div class="field iznos-box data-text">= ${totalFmt}</div>
     
-    <div class="field racun-box data-text">${racun}</div>
+    <div class="field racun-box data-text">${matrixRacun}</div>
     <div class="field model-box data-text">${model}</div>
-    <div class="field poziv-box data-text">${poziv}</div>
+    <div class="field poziv-box data-text">${matrixPoziv}</div>
+    
+    <!-- NBS QR kod za matricni štampač - mali -->
+    <img src="${matrixQRUrl}" class="qr-code-matrix" alt="NBS IPS QR" />
   </div>
 </body>
 </html>
      `
   }
 
+  // Helper funkcija za generisanje QR koda za stavku
+  const generateQRForItem = (item) => {
+    const itemPoziv = item.poziv_na_broj || poziv
+    const itemAmount = parseFloat(item.iznos || 0).toFixed(2).replace('.', ',')
+    const itemSvrha = sanitize(item.opis || stavka)
+    const itemPozivSanitized = sanitize(itemPoziv)
+    
+    // Koristi račun za ovu stavku ako postoji
+    const itemRacun = item.taxType ? getAccountNumberForTax(item.taxType) : racun
+    const itemParts = itemRacun.split('-')
+    const itemBank = itemParts[0]
+    const itemAcc = itemParts[1].padStart(13, '0')
+    const itemCheck = itemParts[2]
+    const itemIpsAccount = `${itemBank}${itemAcc}${itemCheck}`
+    
+    const itemIpsString = `K:PR|V:01|C:1|R:${itemIpsAccount}|N:${n_primalac}|I:RSD${itemAmount}|SF:${sifra}|S:${itemSvrha}|RO:${model}|P:${itemPozivSanitized}`
+    return `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(itemIpsString)}&size=150x150&ecc=M`
+  }
+
   // Generate table rows for A4
-  const rows = items.map(item => `
+  const rows = items.map(item => {
+    const itemPoziv = item.poziv_na_broj || poziv
+    const itemQR = generateQRForItem(item)
+    // Koristi račun za ovu stavku
+    const itemRacun = item.taxType ? getAccountNumberForTax(item.taxType) : racun
+    return `
     <tr>
       <td>
-        <strong>${item.opis}</strong><br>
-        <span style="font-size:9pt; color:#666;">Poziv na broj: ${poziv} | Model: ${model}</span>
+        <div style="display: flex; align-items: flex-start; gap: 10px;">
+          <img src="${itemQR}" alt="QR" style="width: 20mm; height: 20mm; flex-shrink: 0;" />
+          <div style="flex: 1;">
+            <strong>${item.opis}</strong><br>
+            <span style="font-size:9pt; color:#666;">Račun: ${itemRacun} | Poziv na broj: ${itemPoziv} | Model: ${model}</span>
+          </div>
+        </div>
       </td>
       <td class="amount">${parseFloat(item.iznos || 0).toFixed(2).replace('.', ',')}</td>
     </tr>
-  `).join('')
+    `
+  }).join('')
 
   return `
 <!DOCTYPE html>
@@ -464,7 +551,7 @@ export function generateUplatnicaHTML(data) {
           <div class="input-box multiline">${platioc}</div>
           
           <div class="section-label">svrha uplate</div>
-          <div class="input-box multiline">${stavka}</div>
+          <div class="input-box multiline">${stavkaNalog}</div>
           
           <div class="section-label">primalac</div>
           <div class="input-box multiline">${primalac}</div>
@@ -508,18 +595,18 @@ export function generateUplatnicaHTML(data) {
           </div>
 
           <div class="section-label">račun primaoca</div>
-          <div class="input-box">${racun}</div>
+          <div class="input-box">${racunNalog}</div>
 
           <div class="section-label">model i poziv na broj (odobrenje)</div>
           <div class="flex-row">
             <div class="input-box" style="width: 15%; justify-content:center;">${model}</div>
-            <div class="input-box" style="flex: 1; margin-left:5px;">${poziv}</div>
+            <div class="input-box" style="flex: 1; margin-left:5px;">${pozivNalog}</div>
           </div>
           
-          <!-- QR CODE -->
-          <img src="${qrUrl}" class="qr-code" alt="NBS IPS QR" />
-          <div style="position:absolute; bottom:5px; right:42mm; font-size:6pt;">Obrazac br. 1</div>
-          <div style="position:absolute; bottom:5px; right: 10px; font-size:6pt; text-align:center; width:40mm;">NBS IPS QR</div>
+          <!-- QR CODE - prikazuje se samo za pojedinačne uplatnice -->
+          ${qrUrl ? `<img src="${qrUrl}" class="qr-code" alt="NBS IPS QR" />` : ''}
+          ${qrUrl ? `<div style="position:absolute; bottom:5px; right:42mm; font-size:6pt;">Obrazac br. 1</div>` : ''}
+          ${qrUrl ? `<div style="position:absolute; bottom:5px; right: 10px; font-size:6pt; text-align:center; width:40mm;">NBS IPS QR</div>` : ''}
 
         </div>
       </div>
@@ -532,6 +619,9 @@ export function generateUplatnicaHTML(data) {
 }
 
 export function generatePotvrdaHTML(data) {
+  const datum = new Date().toLocaleDateString('sr-RS')
+  const logoUrl = logoBase64
+  
   return `
 <!DOCTYPE html>
 <html lang="sr">
@@ -542,129 +632,314 @@ export function generatePotvrdaHTML(data) {
     @media print {
       @page {
         size: A4;
-        margin: 1cm;
+        margin: 0;
+      }
+      body {
+        margin: 0;
+        padding: 0;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
       }
     }
     body {
-      font-family: Arial, sans-serif;
-      font-size: 11pt;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       margin: 0;
-      padding: 20px;
+      padding: 0;
+      background: white;
+      color: #333;
     }
-    .header {
-      text-align: center;
-      margin-bottom: 20px;
+    .page-container {
+      width: 210mm;
+      min-height: 297mm;
+      position: relative;
+      background: white;
+      overflow: hidden;
     }
-    .org-name {
-      font-weight: bold;
-      font-size: 12pt;
-      text-align: center;
-      margin: 5px 0;
-    }
-    .field {
-      margin: 8px 0;
+    
+    /* UPPER PART - BILL STYLE */
+    .bill-header {
+      padding: 40px 50px 20px 50px;
       display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid #e0e0e0;
     }
-    .label {
-      font-weight: bold;
-      min-width: 150px;
+    .org-info img {
+      height: 60px;
+      margin-bottom: 10px;
     }
-    .value {
-      flex: 1;
+    .org-details {
+      font-size: 9pt;
+      color: #666;
+      line-height: 1.4;
     }
-    .section {
-      margin: 15px 0;
-      border-top: 1px solid #000;
-      padding-top: 10px;
-    }
-    .title {
-      text-align: center;
-      font-weight: bold;
+    .org-title {
       font-size: 14pt;
-      margin: 20px 0;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin: 15px 0;
-    }
-    table th, table td {
-      border: 1px solid #000;
-      padding: 5px;
-      text-align: left;
-    }
-    table th {
-      background-color: #f0f0f0;
       font-weight: bold;
+      color: #000;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+    .bill-meta {
+      text-align: right;
+      font-size: 10pt;
+    }
+    .meta-row {
+      margin-bottom: 5px;
+    }
+    .meta-label {
+      color: #666;
+      margin-right: 10px;
+    }
+    .meta-value {
+      font-weight: bold;
+    }
+    
+    .client-section {
+      padding: 30px 50px;
+      background: #f9f9f9;
+      display: flex;
+      justify-content: space-between;
+    }
+    .client-box {
+      width: 45%;
+    }
+    .box-title {
+      font-size: 8pt;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 10px;
+      font-weight: bold;
+    }
+    .client-name {
+      font-size: 12pt;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+    .client-details {
+      font-size: 10pt;
+      color: #444;
+      line-height: 1.5;
+    }
+
+    .bill-table {
+      width: calc(100% - 100px);
+      margin: 20px 50px;
+      border-collapse: collapse;
+    }
+    .bill-table th {
+      text-align: left;
+      padding: 12px 15px;
+      background: #000;
+      color: white;
+      font-size: 9pt;
+      text-transform: uppercase;
+    }
+    .bill-table td {
+      padding: 15px;
+      border-bottom: 1px solid #eee;
+      font-size: 10pt;
+    }
+
+    .info-footer {
+      margin: 40px 50px;
+      font-size: 9pt;
+      color: #666;
+      border-top: 1px solid #eee;
+      padding-top: 20px;
+      line-height: 1.6;
+    }
+
+    /* CUT LINE */
+    .cut-line {
+      margin: 0 20px;
+      border-top: 2px dashed #ccc;
+      position: relative;
+      height: 20px;
+    }
+    .cut-icon {
+      position: absolute;
+      top: -10px;
+      left: 20px;
+      background: white;
+      padding: 0 5px;
+      font-size: 12px;
+      color: #999;
+    }
+
+    /* BOTTOM PART - POTPIS */
+    .signature-wrapper {
+      padding: 30px 50px;
+      margin-top: 30px;
+    }
+    .signature-section {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 60px;
+    }
+    .signature-box {
+      width: 45%;
+      text-align: center;
+    }
+    .signature-line {
+      border-bottom: 1px solid #000;
+      width: 100%;
+      height: 40px;
+      margin-bottom: 5px;
+    }
+    .signature-label {
+      font-size: 9pt;
+      color: #666;
+      text-transform: uppercase;
+    }
+    
+    .title-section {
+      text-align: center;
+      margin: 30px 0;
+      padding: 20px 0;
+    }
+    .title-main {
+      font-size: 18pt;
+      font-weight: bold;
+      letter-spacing: 3px;
+      margin-bottom: 10px;
+    }
+    .intro-text {
+      margin: 20px 50px;
+      font-size: 10pt;
+      line-height: 1.6;
+      color: #444;
+    }
+    .request-text {
+      margin: 0 50px 25px 50px;
+      padding: 15px 0;
+      font-size: 9pt;
+      line-height: 1.5;
+      color: #666;
+      font-style: italic;
+      text-align: justify;
+      border-top: 1px solid #e0e0e0;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    .request-text strong {
+      font-style: normal;
+      color: #333;
+      font-weight: 600;
     }
   </style>
 </head>
 <body>
-  <div class="header">
-    <div class="org-name">REPUBLIKA SRBIJA</div>
-    <div class="org-name">GRAD NOVI PAZAR</div>
-    <div class="org-name">GRADSKA UPRAVA ZA NAPLATU JAVNIH PRIHODA</div>
-    <div style="margin-top: 10px;">
-      <span>Broj: _____________</span>
-      <span style="margin-left: 30px;">Datum: ${new Date().toLocaleDateString('sr-RS')}</span>
+  <div class="page-container">
+    
+    <!-- BILL HEADER -->
+    <div class="bill-header">
+      <div class="org-info">
+        <div style="display:flex; align-items:center; gap:15px;">
+           <img src="${logoUrl}" alt="Grb">
+           <div>
+             <div class="org-title">GRAD NOVI PAZAR</div>
+             <div class="org-details">
+               Gradska uprava za naplatu javnih prihoda<br>
+               7. Juli bb, 36300 Novi Pazar<br>
+               PIB: 104318304 | Matični broj: 07204990<br>
+               Radno vreme: 07:30 - 15:30 | www.nplpa.rs
+             </div>
+           </div>
+        </div>
+      </div>
+      <div class="bill-meta">
+        <div class="meta-row">
+          <span class="meta-label">BROJ:</span>
+          <span class="meta-value">_____________</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">DATUM IZDAVANJA:</span>
+          <span class="meta-value">${datum}</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">MESTO IZDAVANJA:</span>
+          <span class="meta-value">Novi Pazar</span>
+        </div>
+      </div>
     </div>
-  </div>
-  
-  <div style="margin: 20px 0;">
-    <p>Na zahtev</p>
-    <p>a na osnovu podataka kojim raspolaže GRADSKA UPRAVA ZA NAPLATU JAVNIH PRIHODA,</p>
-    <p>izdaje se sledeća</p>
-  </div>
-  
-  <div class="title">P O T V R D A</div>
-  
-  <div style="margin: 20px 0;">
-    <p>Da je:</p>
-    <div class="field">
-      <span class="label">Ime i prezime:</span>
-      <span class="value">${data.obveznik || data.ime_i_prezime || ''}</span>
+
+    <!-- REQUEST TEXT - Moderno stilizovan - IZNAD NASLOVA -->
+    ${data.zahteva_ime_prezime ? `
+    <div class="request-text">
+      Na zahtev <strong>${data.zahteva_ime_prezime}</strong>, a na osnovu podataka kojim raspolaže GRADSKA UPRAVA ZA NAPLATU JAVNIH PRIHODA, izdaje se sledeća potvrda.
     </div>
-    <div class="field">
-      <span class="label">JMBG:</span>
-      <span class="value">${data.jmbg || ''}</span>
+    ` : `
+    <div class="request-text">
+      Na zahtev, a na osnovu podataka kojim raspolaže GRADSKA UPRAVA ZA NAPLATU JAVNIH PRIHODA, izdaje se sledeća potvrda.
     </div>
-    <div class="field">
-      <span class="label">Adresa:</span>
-      <span class="value">${data.adresa_obveznika || data.adresa || ''}</span>
+    `}
+
+    <!-- TITLE -->
+    <div class="title-section">
+      <div class="title-main">P O T V R D A</div>
     </div>
-    <p>poreski obveznik poreza na imovinu.</p>
-  </div>
-  
-  <div style="margin: 20px 0;">
-    <p>Imenovani je prijavio sledeće nepokretnosti:</p>
-    <table>
-      <thead>
-        <tr>
-          <th>Red. br.</th>
-          <th>Vrsta objekta</th>
-          <th>Vrsta prava</th>
-          <th>Ulica i broj</th>
-          <th>Površina</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>1</td>
-          <td>${data.vrsta_nepokretnosti || ''}</td>
-          <td>${data.vrsta_prava || ''}</td>
-          <td>${data.adresa_objekta || ''}</td>
-          <td>${data.oporeziva_povrsina || ''} m²</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  
-  <div style="margin-top: 30px;">
-    <p>Potvrda se izdaje za potrebe ${data.svrha || 'DEČIJEG DODATKA'} i ${data.svrha2 || 'PREBIVALIŠTA'}.</p>
-  </div>
-  
-  <div style="margin-top: 50px; text-align: right;">
-    <p>R E F E R E N T</p>
+
+    <!-- CLIENT INFO -->
+    <div class="client-section">
+      <div class="client-box">
+        <div class="box-title">PODACI O OBVEZNIKU</div>
+        <div class="client-name">${data.obveznik || data.ime_i_prezime || ''}</div>
+        <div class="client-details">
+          ${data.adresa_obveznika || data.adresa || ''}<br>
+          JMBG: ${data.jmbg || ''}
+        </div>
+        <div style="margin-top: 15px; font-size: 10pt; color: #444;">
+          poreski obveznik poreza na imovinu.
+        </div>
+      </div>
+    </div>
+
+    <!-- NEPOKRETNOSTI TABLE -->
+    <div style="margin: 20px 0;">
+      <div style="margin: 0 50px 15px 50px; font-size: 10pt; color: #444;">
+        Imenovani je prijavio sledeće nepokretnosti:
+      </div>
+      <table class="bill-table">
+        <thead>
+          <tr>
+            <th style="width: 8%;">Red. br.</th>
+            <th style="width: 25%;">Vrsta objekta</th>
+            <th style="width: 20%;">Vrsta prava</th>
+            <th style="width: 32%;">Ulica i broj</th>
+            <th style="width: 15%; text-align: right;">Površina</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>${data.vrsta_nepokretnosti || ''}</td>
+            <td>${data.vrsta_prava || ''}</td>
+            <td>${data.adresa_objekta || ''}</td>
+            <td style="text-align: right;">${data.oporeziva_povrsina || ''} m²</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- INFO FOOTER -->
+    <div class="info-footer">
+      Potvrda se izdaje za potrebe <strong>${data.svrha_izbor === 'CUSTOM' ? (data.svrha_custom || '') : (data.svrha_izbor || 'DEČIJEG DODATKA')}</strong>.
+    </div>
+
+    <!-- BOTTOM SIGNATURE SECTION -->
+    <div class="signature-wrapper">
+      <div class="signature-section">
+        <div class="signature-box">
+          <div class="signature-line"></div>
+          <div class="signature-label">R E F E R E N T</div>
+        </div>
+        <div class="signature-box">
+          <div class="signature-line"></div>
+          <div class="signature-label">POTPIS I PEČAT</div>
+        </div>
+      </div>
+    </div>
+    
   </div>
 </body>
 </html>

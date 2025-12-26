@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, globalShortcut, nativeTheme } from 'electron'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, copyFileSync, mkdirSync, statSync } from 'fs'
 import { createRequire } from 'module'
 import Database from './database/sqlite.js'
 import { importExcelFile } from './utils/excelImporter.js'
@@ -43,7 +43,7 @@ function createWindow() {
         preload: preloadPath,
         nodeIntegration: false,
         contextIsolation: true,
-        devTools: isDev // Disable DevTools in production
+        devTools: true // Enable DevTools (can be opened with F12)
       },
       frame: true,
       transparent: false,
@@ -176,11 +176,22 @@ function createWindow() {
       console.log('Page loaded successfully:', mainWindow.webContents.getURL())
     })
 
-    // DevTools shortcuts disabled in production
-    if (isDev) {
-      // Open DevTools shortcut (F12 or Ctrl+Shift+I) - only in development
-      mainWindow.webContents.on('before-input-event', (event, input) => {
-        if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
+    // Enable F12 shortcut for DevTools (works in both dev and production)
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
+        event.preventDefault()
+        if (mainWindow.webContents.isDevToolsOpened()) {
+          mainWindow.webContents.closeDevTools()
+        } else {
+          mainWindow.webContents.openDevTools()
+        }
+      }
+    })
+    
+    // Also register global shortcut for F12 (works in production too)
+    try {
+      const ret = globalShortcut.register('F12', () => {
+        if (mainWindow && mainWindow.webContents) {
           if (mainWindow.webContents.isDevToolsOpened()) {
             mainWindow.webContents.closeDevTools()
           } else {
@@ -188,6 +199,11 @@ function createWindow() {
           }
         }
       })
+      if (ret) {
+        console.log('F12 shortcut registered for DevTools')
+      }
+    } catch (error) {
+      console.warn('Could not register F12 shortcut:', error.message)
     }
   } catch (error) {
     console.error('Error creating window:', error)
@@ -200,7 +216,7 @@ function createMenu() {
   const template = [
     // { role: 'fileMenu' }
     {
-      label: 'Datoteka',
+      label: 'Aplikacija',
       submenu: [
         { role: 'quit', label: 'Izlaz' }
       ]
@@ -246,16 +262,20 @@ function createMenu() {
         }
       ]
     },
-    // Uplatnice Menu
+    { type: 'separator' },
+    // Uplatnice Menu - Naglašeno
     {
-      label: 'Uplatnice',
-      click: () => mainWindow && mainWindow.webContents.send('navigate', 'uplatnice')
+      label: '▶ Uplatnice',
+      click: () => mainWindow && mainWindow.webContents.send('navigate', 'uplatnice'),
+      accelerator: 'CmdOrCtrl+U'
     },
-    // Potvrde Menu
+    // Potvrde Menu - Naglašeno
     {
-      label: 'Potvrde',
-      click: () => mainWindow && mainWindow.webContents.send('navigate', 'potvrde')
+      label: '▶ Potvrde',
+      click: () => mainWindow && mainWindow.webContents.send('navigate', 'potvrde'),
+      accelerator: 'CmdOrCtrl+P'
     },
+    { type: 'separator' },
     // Settings Menu (renamed from Alati)
     {
       label: 'Podešavanja',
@@ -386,24 +406,63 @@ function createMenu() {
 }
 
 app.whenReady().then(() => {
-  // Initialize database asynchronously to not block window creation
-  Promise.resolve().then(async () => {
+  createMenu()
+  createWindow()
+  
+  // Initialize database asynchronously after window is created
+  // Use setTimeout to ensure app.getPath is available
+  setTimeout(() => {
     try {
       db = new Database()
       db.initialize()
-      if (process.env.NODE_ENV === 'development') {
-        console.log('Database initialized successfully')
+      
+      // Send database status to renderer
+      const sendStatus = () => {
+        if (mainWindow && mainWindow.webContents && !mainWindow.isDestroyed()) {
+          if (db) {
+            try {
+              const uplatniceCount = db.uplatnice.count()
+              const potvrdeCount = db.potvrde.count()
+              mainWindow.webContents.send('database-status', {
+                initialized: true,
+                uplatnice: uplatniceCount,
+                potvrde: potvrdeCount
+              })
+            } catch (error) {
+              mainWindow.webContents.send('database-status', {
+                initialized: false,
+                error: error.message
+              })
+            }
+          }
+        }
+      }
+      
+      // Try after window loads
+      if (mainWindow && mainWindow.webContents) {
+        if (mainWindow.webContents.isLoading()) {
+          mainWindow.webContents.once('did-finish-load', sendStatus)
+        } else {
+          sendStatus()
+        }
       }
     } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Database initialization error:', error.message)
-        console.log('Continuing without database - will use exported .db files if available')
+      console.error('Database initialization error:', error.message)
+      if (mainWindow && mainWindow.webContents && !mainWindow.isDestroyed()) {
+        const sendError = () => {
+          mainWindow.webContents.send('database-status', {
+            initialized: false,
+            error: error.message
+          })
+        }
+        if (mainWindow.webContents.isLoading()) {
+          mainWindow.webContents.once('did-finish-load', sendError)
+        } else {
+          sendError()
+        }
       }
     }
-  })
-
-  createMenu()
-  createWindow()
+  }, 100)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -490,9 +549,21 @@ ipcMain.handle('import-excel', async (event, { filePath, type, mode }) => {
 
 ipcMain.handle('db-query', async (event, { table, method, args }) => {
   try {
-    console.log(`[IPC] db-query: table=${table}, method=${method}`)
+    // If database is not initialized, try to initialize it
     if (!db) {
-      console.warn('[IPC] Database not initialized')
+      console.warn('[IPC] Database not initialized, attempting to initialize...')
+      try {
+        db = new Database()
+        db.initialize()
+        console.log('[IPC] Database initialized successfully')
+      } catch (initError) {
+        console.error('[IPC] Failed to initialize database:', initError.message)
+        return []
+      }
+    }
+
+    if (!db) {
+      console.warn('[IPC] Database still not initialized after retry')
       return []
     }
 
@@ -519,26 +590,207 @@ ipcMain.handle('db-query', async (event, { table, method, args }) => {
       throw new Error(`Unknown table: ${table}`)
     }
 
-    console.log(`[IPC] db-query success: ${method}`)
     return result
   } catch (error) {
     console.error('[IPC] db-query error:', error)
-    throw new Error(error.message)
+    return []
+  }
+})
+
+ipcMain.handle('select-database-file', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [
+      { name: 'Database Files', extensions: ['db'] }
+    ]
+  })
+
+  if (!result.canceled && result.filePaths.length > 0) {
+    return result.filePaths[0]
+  }
+  return null
+})
+
+ipcMain.handle('load-database-file', async (event, { filePath, type }) => {
+  try {
+    if (!filePath || !type) {
+      return { success: false, error: 'Missing filePath or type' }
+    }
+
+    if (!existsSync(filePath)) {
+      return { success: false, error: 'Database file not found' }
+    }
+
+    if (type !== 'uplatnice' && type !== 'potvrde') {
+      return { success: false, error: 'Invalid type. Must be "uplatnice" or "potvrde"' }
+    }
+
+    const userDataPath = app.getPath('userData')
+    const dbDir = join(userDataPath, 'database')
+    
+    if (!existsSync(dbDir)) {
+      mkdirSync(dbDir, { recursive: true })
+    }
+
+    const targetPath = join(dbDir, `${type}.db`)
+    
+    // Close existing database connections before copying
+    try {
+      if (db) {
+        console.log('Closing existing database connections...')
+        db.close()
+        db = null // Clear reference
+      }
+    } catch (closeError) {
+      console.warn('Error closing database (may already be closed):', closeError.message)
+    }
+    
+    // Copy file
+    copyFileSync(filePath, targetPath)
+    console.log(`Copied ${type}.db to ${targetPath}`)
+
+    // Reinitialize database - create new instance
+    // Note: Native modules (better-sqlite3) can't be reloaded in same process
+    // So we'll just copy the file and ask user to restart
+    try {
+      console.log('Initializing new database instance...')
+      db = new Database()
+      db.initialize()
+      console.log('Database reinitialized successfully')
+      
+      // Notify renderer to refresh stats
+      if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('database-reloaded')
+      }
+      
+      return { success: true, message: `Database ${type} loaded successfully` }
+    } catch (error) {
+      console.error('Error reinitializing database:', error)
+      // File is copied successfully, but can't reload native module
+      // User needs to restart app
+      return { 
+        success: true, 
+        message: `Database ${type} kopiran uspešno. Molimo restartujte aplikaciju (zatvorite i ponovo otvorite) da se promene primene.`,
+        needsRestart: true
+      }
+    }
+  } catch (error) {
+    console.error('Load database file error:', error)
+    return { success: false, error: error.message }
   }
 })
 
 ipcMain.handle('get-db-stats', async () => {
   try {
+    // If database is not initialized, try to initialize it
     if (!db) {
-      console.warn('Database not initialized, returning zero stats')
+      console.warn('Database not initialized, attempting to initialize...')
+      try {
+        db = new Database()
+        db.initialize()
+        console.log('Database initialized successfully in get-db-stats')
+      } catch (initError) {
+        console.error('Failed to initialize database:', initError.message)
+        return { uplatnice: 0, potvrde: 0 }
+      }
+    }
+
+    if (!db) {
       return { uplatnice: 0, potvrde: 0 }
     }
-    const uplatniceCount = await db.uplatnice.count()
-    const potvrdeCount = await db.potvrde.count()
+
+    const uplatniceCount = db.uplatnice.count()
+    const potvrdeCount = db.potvrde.count()
     return { uplatnice: uplatniceCount, potvrde: potvrdeCount }
   } catch (error) {
     console.error('get-db-stats error:', error)
     return { uplatnice: 0, potvrde: 0 }
+  }
+})
+
+ipcMain.handle('get-db-debug-info', async () => {
+  try {
+    // If database is not initialized, try to initialize it
+    if (!db) {
+      try {
+        db = new Database()
+        db.initialize()
+        console.log('Database initialized successfully in get-db-debug-info')
+      } catch (initError) {
+        console.error('Failed to initialize database:', initError.message)
+      }
+    }
+
+    const userDataPath = app.getPath('userData')
+    const dbDir = join(userDataPath, 'database')
+    const targetU = join(dbDir, 'uplatnice.db')
+    const targetP = join(dbDir, 'potvrde.db')
+    
+    const info = {
+      userDataPath,
+      dbDir,
+      uplatniceDb: {
+        path: targetU,
+        exists: existsSync(targetU),
+        size: existsSync(targetU) ? statSync(targetU).size : 0,
+        count: 0
+      },
+      potvrdeDb: {
+        path: targetP,
+        exists: existsSync(targetP),
+        size: existsSync(targetP) ? statSync(targetP).size : 0,
+        count: 0
+      },
+      dbInitialized: !!db
+    }
+    
+    if (db) {
+      try {
+        info.uplatniceDb.count = db.uplatnice.count()
+        info.potvrdeDb.count = db.potvrde.count()
+      } catch (error) {
+        console.error('Error getting counts:', error)
+      }
+    }
+    
+    // Check for source databases in resources
+    if (app.isPackaged) {
+      const basePaths = []
+      if (process.resourcesPath) basePaths.push(process.resourcesPath)
+      if (process.execPath) {
+        basePaths.push(dirname(process.execPath))
+        basePaths.push(join(dirname(process.execPath), 'resources'))
+      }
+      if (process.env.APPDIR) {
+        basePaths.push(process.env.APPDIR)
+        basePaths.push(join(process.env.APPDIR, 'resources'))
+      }
+      
+      info.sourceDatabases = []
+      for (const basePath of basePaths) {
+        const testU = join(basePath, 'uplatnice.db')
+        const testP = join(basePath, 'potvrde.db')
+        if (existsSync(testU) && existsSync(testP)) {
+          info.sourceDatabases.push({
+            basePath,
+            uplatnice: {
+              path: testU,
+              size: statSync(testU).size
+            },
+            potvrde: {
+              path: testP,
+              size: statSync(testP).size
+            }
+          })
+          break // Found first valid source
+        }
+      }
+    }
+    
+    return info
+  } catch (error) {
+    console.error('get-db-debug-info error:', error)
+    return { error: error.message }
   }
 })
 
@@ -563,23 +815,9 @@ ipcMain.handle('migrate-excel-to-db', async (event, { filePath, type }) => {
   }
 })
 
-function registerShortcuts() {
-  globalShortcut.unregister('F12')
-  globalShortcut.register('F12', () => {
-    if (mainWindow) {
-      mainWindow.webContents.openDevTools({ mode: 'detach' })
-    }
-  })
-}
+// F12 shortcut is now handled in createWindow() via before-input-event
 
-app.whenReady().then(() => {
-  createWindow()
-  registerShortcuts()
-
-  app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
-})
+// Shortcuts are registered in createWindow() now
 
 app.on('window-all-closed', () => {
   globalShortcut.unregisterAll()

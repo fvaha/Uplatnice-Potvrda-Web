@@ -25,6 +25,9 @@ export default function Settings({ onNavigate, uiMode, setUiMode, darkMode, setD
   const [migrating, setMigrating] = useState(false)
   const [migrateResult, setMigrateResult] = useState(null)
   const [migrateError, setMigrateError] = useState(null)
+  const [loadingDb, setLoadingDb] = useState({ uplatnice: false, potvrde: false })
+  const [loadDbResult, setLoadDbResult] = useState(null)
+  const [loadDbError, setLoadDbError] = useState(null)
   const fileInputRef = useRef(null)
 
   const [username, setUsername] = useState('')
@@ -141,6 +144,46 @@ export default function Settings({ onNavigate, uiMode, setUiMode, darkMode, setD
     }
   }
 
+  const handleLoadDatabase = async (type) => {
+    if (!isElectron) return
+
+    setLoadingDb(prev => ({ ...prev, [type]: true }))
+    setLoadDbResult(null)
+    setLoadDbError(null)
+
+    try {
+      const filePath = await window.electronAPI.selectDatabaseFile()
+      if (!filePath) {
+        setLoadingDb(prev => ({ ...prev, [type]: false }))
+        return
+      }
+
+      const result = await window.electronAPI.loadDatabaseFile({ filePath, type })
+      if (result.success) {
+        if (result.needsRestart) {
+          setLoadDbResult({ type, message: result.message })
+          // Show alert that restart is needed
+          setTimeout(() => {
+            alert(result.message)
+          }, 100)
+        } else {
+          setLoadDbResult({ type, message: result.message })
+          // Wait a bit for database to reinitialize
+          await new Promise(resolve => setTimeout(resolve, 500))
+          await refreshStats()
+        }
+        // Clear result after 5 seconds
+        setTimeout(() => setLoadDbResult(null), 5000)
+      } else {
+        setLoadDbError(result.error || 'Failed to load database')
+      }
+    } catch (error) {
+      setLoadDbError(error.message)
+    } finally {
+      setLoadingDb(prev => ({ ...prev, [type]: false }))
+    }
+  }
+
   if (!isAuthenticated) {
     return (
       <div className="h-full flex items-center justify-center p-4">
@@ -204,53 +247,6 @@ export default function Settings({ onNavigate, uiMode, setUiMode, darkMode, setD
           <p className="text-sm text-muted-foreground">Podesite izgled, takse, štampače i rad sa podacima</p>
         </div>
         <Button variant="outline" onClick={handleLogout}>Odjavi se</Button>
-      </div>
-
-      {/* Appearance & Mode */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <Card>
-          <CardContent className="pt-4 space-y-3">
-            <h3 className="text-sm font-medium mb-2">Izgled Interfejsa</h3>
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                variant={uiMode === 'liquid' ? 'default' : 'outline'}
-                onClick={() => setUiMode('liquid')}
-                className="h-10 text-xs"
-              >
-                Liquid Glass
-              </Button>
-              <Button
-                variant={uiMode === 'standard' ? 'default' : 'outline'}
-                onClick={() => setUiMode('standard')}
-                className="h-10 text-xs"
-              >
-                Standardno
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-4 space-y-3">
-            <h3 className="text-sm font-medium mb-2">Tema Aplikacije</h3>
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                variant={!darkMode ? 'default' : 'outline'}
-                onClick={() => setDarkMode(false)}
-                className="h-10 text-xs"
-              >
-                Svetla Tema
-              </Button>
-              <Button
-                variant={darkMode ? 'default' : 'outline'}
-                onClick={() => setDarkMode(true)}
-                className="h-10 text-xs"
-              >
-                Tamna Tema
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       {/* Taxes & Printers */}
@@ -360,6 +356,64 @@ export default function Settings({ onNavigate, uiMode, setUiMode, darkMode, setD
             </div>
           </div>
 
+          {/* Load Database Files - Show if stats are 0 */}
+          {(dbStats.uplatnice === 0 || dbStats.potvrde === 0) && isElectron && (
+            <div className="p-3 rounded-lg bg-muted/50 border border-border">
+              <div className="flex items-center gap-2 text-foreground text-sm mb-3">
+                <AlertCircle size={16} />
+                <span>Baze podataka nisu pronađene. Učitajte .db fajlove ručno:</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleLoadDatabase('uplatnice')}
+                  disabled={loadingDb.uplatnice}
+                  className="h-9"
+                >
+                  {loadingDb.uplatnice ? (
+                    <Loader className="animate-spin" size={12} />
+                  ) : (
+                    <Database size={12} />
+                  )}
+                  <span className="ml-1 text-xs">Učitaj uplatnice.db</span>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleLoadDatabase('potvrde')}
+                  disabled={loadingDb.potvrde}
+                  className="h-9"
+                >
+                  {loadingDb.potvrde ? (
+                    <Loader className="animate-spin" size={12} />
+                  ) : (
+                    <Database size={12} />
+                  )}
+                  <span className="ml-1 text-xs">Učitaj potvrde.db</span>
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {loadDbResult && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-3 rounded-lg bg-muted/50 border border-border">
+              <div className="flex items-center gap-2 text-foreground text-sm">
+                <CheckCircle size={16} />
+                <span>{loadDbResult.message}</span>
+              </div>
+            </motion.div>
+          )}
+
+          {loadDbError && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+              <div className="flex items-center gap-2 text-destructive text-sm">
+                <AlertCircle size={16} />
+                <span>{loadDbError}</span>
+              </div>
+            </motion.div>
+          )}
+
           {/* Import */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="space-y-2 p-3 border rounded-lg">
@@ -418,8 +472,8 @@ export default function Settings({ onNavigate, uiMode, setUiMode, darkMode, setD
           <input ref={fileInputRef} type="file" accept=".xlsm,.xlsx,.xls" onChange={handleFileSelect} className="hidden" />
 
           {importResult && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-3 rounded-lg bg-green-500/10 border border-green-500/20">
-              <div className="flex items-center gap-2 text-green-600 dark:text-green-400 text-sm">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-3 rounded-lg bg-muted/50 border border-border">
+              <div className="flex items-center gap-2 text-foreground text-sm">
                 <CheckCircle size={16} />
                 <span>Import uspešan! Dodato: {importResult.inserted || 0}, Update: {importResult.updated || 0}</span>
               </div>
@@ -446,7 +500,7 @@ export default function Settings({ onNavigate, uiMode, setUiMode, darkMode, setD
               Migriraj u .db fajlove
             </Button>
             {migrateResult && (
-              <div className="mt-3 p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-sm text-green-600">
+              <div className="mt-3 p-3 rounded-lg bg-muted/50 border border-border text-sm text-foreground">
                 Migracija uspešna! Dodato: {migrateResult.inserted || 0}
               </div>
             )}
